@@ -1,0 +1,17 @@
+.{
+    .name = .mahmah,
+    .version = "0.0.0",
+    .fingerprint = 0x20e8d7c989a4c35a,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .httpz = .{
+            .url = "git+https://github.com/karlseguin/http.zig.git#9b14af98fde5e98abb9a8376fe02b42003e835bf",
+            .hash = "httpz-0.0.0-PNVzrMgTCQDhzfBLRRebTx9LU056Ph2erdN9-42rFbhj",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
