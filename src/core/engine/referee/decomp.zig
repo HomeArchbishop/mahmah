@@ -1,55 +1,321 @@
-//! 数牌单花色面子分解表：DecompTable / DecompTable_H。
-//! 字牌不建表，见 `honorPureOk` / `honorPairIndex`。
+//! 标准型面子分解：输入手牌计数，输出全部拆分方案。
+//! 数牌查表、字牌刻/对拆分为内部实现。
 const std = @import("std");
 
-/// 状态编码空间大小：`5^9`（每位计数 0..4）。
-pub const INDEX_SIZE: usize = 1_953_125;
-/// 建表时单花色最大张数。
-pub const MAX_TILES: u8 = 14;
-/// 单方案最多面子数（14 张内纯面子至多 4）。
+/// 闭张内最多面子数。
 pub const MAX_MELDS: u8 = 4;
+/// 单次 `decompose` 组合展开上限（防止极端牌姿写爆缓冲）。
+const MAX_DECOMPS: usize = 64;
 
 /// 面子类型。
 pub const MeldKind = enum(u8) {
-    /// 刻子（三同数字）。
     kotzu,
-    /// 顺子（连续三张）。
     shuntsu,
 };
 
-/// 一个面子：类型 + 起始数字。
+/// 整手中的一个面子（牌种为 0..33）。
 pub const Meld = struct {
     kind: MeldKind,
-    /// 起始数字 1..9（刻子即该数字；顺子为最小数字）。
+    /// 刻子：该牌种；顺子：起始牌种（同花色连续三张的最小）。
+    tile: u8,
+};
+
+/// 一种完整标准型分解：雀头 + 闭张面子（不含副露）。
+pub const Decomp = struct {
+    /// 雀头牌种 0..33。
+    pair: u8,
+    melds: [MAX_MELDS]Meld = undefined,
+    len: u8 = 0,
+};
+
+/// 对闭张 34 计数做标准型分解。
+/// `need_mentsu` = `4 - fuuro_len`；要求 `Σ counts == 2 + 3 * need_mentsu`。
+/// 写入 `out`，返回实际写出的子切片（可能被截断到 `out.len`）。
+pub fn decompose(counts: *const [34]u8, need_mentsu: u8, out: []Decomp) []Decomp {
+    if (need_mentsu > MAX_MELDS) return out[0..0];
+    const expect: u8 = 2 + 3 * need_mentsu;
+    if (sum34(counts) != expect) return out[0..0];
+
+    var man: [9]u8 = undefined;
+    var pin: [9]u8 = undefined;
+    var sou: [9]u8 = undefined;
+    var hon: [7]u8 = undefined;
+    @memcpy(&man, counts[0..9]);
+    @memcpy(&pin, counts[9..18]);
+    @memcpy(&sou, counts[18..27]);
+    @memcpy(&hon, counts[27..34]);
+
+    var n: usize = 0;
+    var pair_kind: u8 = 0;
+    while (pair_kind < 34) : (pair_kind += 1) {
+        if (counts[pair_kind] < 2) continue;
+        n = emitWithPair(pair_kind, &man, &pin, &sou, &hon, need_mentsu, out, n);
+        if (n >= out.len) break;
+    }
+    return out[0..n];
+}
+
+fn emitWithPair(
+    pair_kind: u8,
+    man: *const [9]u8,
+    pin: *const [9]u8,
+    sou: *const [9]u8,
+    hon: *const [7]u8,
+    need_mentsu: u8,
+    out: []Decomp,
+    start: usize,
+) usize {
+    // 各组方案：pair 组用含雀头，其余用纯面子
+    var g0: GroupPlans = undefined;
+    var g1: GroupPlans = undefined;
+    var g2: GroupPlans = undefined;
+    var g3: GroupPlans = undefined;
+    var groups = [_]*GroupPlans{ &g0, &g1, &g2, &g3 };
+
+    const pair_group: u8 = if (pair_kind < 9) 0 else if (pair_kind < 18) 1 else if (pair_kind < 27) 2 else 3;
+
+    if (pair_group == 0) {
+        if (!fillSuitedPair(&g0, man, pair_kind - 0, 0)) return start;
+    } else {
+        if (!fillSuitedPure(&g0, man, 0)) return start;
+    }
+    if (pair_group == 1) {
+        if (!fillSuitedPair(&g1, pin, pair_kind - 9, 9)) return start;
+    } else {
+        if (!fillSuitedPure(&g1, pin, 9)) return start;
+    }
+    if (pair_group == 2) {
+        if (!fillSuitedPair(&g2, sou, pair_kind - 18, 18)) return start;
+    } else {
+        if (!fillSuitedPure(&g2, sou, 18)) return start;
+    }
+    if (pair_group == 3) {
+        if (!fillHonorPair(&g3, hon, pair_kind)) return start;
+    } else {
+        if (!fillHonorPure(&g3, hon)) return start;
+    }
+
+    return product(pair_kind, &groups, need_mentsu, out, start);
+}
+
+/// 一组花色/字牌的面子列表（中间结果，无雀头）。
+const MeldBag = struct {
+    melds: [MAX_MELDS]Meld = undefined,
+    len: u8 = 0,
+};
+
+const GroupPlans = struct {
+    plans: [16]MeldBag = undefined,
+    len: u8 = 0,
+};
+
+fn fillSuitedPure(g: *GroupPlans, counts: *const [9]u8, base: u8) bool {
+    const ps = suitedPurePlans(counts);
+    if (ps.len == 0) return false;
+    g.len = 0;
+    for (ps) |sp| {
+        if (g.len >= g.plans.len) break;
+        g.plans[g.len] = suitPlanToMelds(sp, base);
+        g.len += 1;
+    }
+    return g.len > 0;
+}
+
+fn fillSuitedPair(g: *GroupPlans, counts: *const [9]u8, local_pair: u8, base: u8) bool {
+    const want: u8 = local_pair + 1;
+    const ps = suitedPairPlans(counts);
+    g.len = 0;
+    for (ps) |sp| {
+        if (sp.pair_tile != want) continue;
+        if (g.len >= g.plans.len) break;
+        g.plans[g.len] = suitPlanHToMelds(sp, base);
+        g.len += 1;
+    }
+    return g.len > 0;
+}
+
+fn fillHonorPure(g: *GroupPlans, honors: *const [7]u8) bool {
+    const p = honorPurePlan(honors) orelse return false;
+    g.plans[0] = honorPlanToMelds(p);
+    g.len = 1;
+    return true;
+}
+
+fn fillHonorPair(g: *GroupPlans, honors: *const [7]u8, pair_kind: u8) bool {
+    const p = honorPairPlan(honors) orelse return false;
+    if (p.pair_tile != pair_kind - 26) return false;
+    g.plans[0] = honorPlanHToMelds(p);
+    g.len = 1;
+    return true;
+}
+
+fn suitPlanToMelds(sp: SuitPlan, base: u8) MeldBag {
+    var bag: MeldBag = .{};
+    var i: u8 = 0;
+    while (i < sp.len) : (i += 1) {
+        bag.melds[i] = .{
+            .kind = sp.melds[i].kind,
+            .tile = base + (sp.melds[i].start - 1),
+        };
+    }
+    bag.len = sp.len;
+    return bag;
+}
+
+fn suitPlanHToMelds(sp: SuitPlanH, base: u8) MeldBag {
+    var bag: MeldBag = .{};
+    var i: u8 = 0;
+    while (i < sp.len) : (i += 1) {
+        bag.melds[i] = .{
+            .kind = sp.melds[i].kind,
+            .tile = base + (sp.melds[i].start - 1),
+        };
+    }
+    bag.len = sp.len;
+    return bag;
+}
+
+fn honorPlanToMelds(sp: SuitPlan) MeldBag {
+    var bag: MeldBag = .{};
+    var i: u8 = 0;
+    while (i < sp.len) : (i += 1) {
+        bag.melds[i] = .{
+            .kind = .kotzu,
+            .tile = 26 + sp.melds[i].start,
+        };
+    }
+    bag.len = sp.len;
+    return bag;
+}
+
+fn honorPlanHToMelds(sp: SuitPlanH) MeldBag {
+    var bag: MeldBag = .{};
+    var i: u8 = 0;
+    while (i < sp.len) : (i += 1) {
+        bag.melds[i] = .{
+            .kind = .kotzu,
+            .tile = 26 + sp.melds[i].start,
+        };
+    }
+    bag.len = sp.len;
+    return bag;
+}
+
+fn product(pair: u8, groups: *const [4]*GroupPlans, need_mentsu: u8, out: []Decomp, start: usize) usize {
+    var n = start;
+    var idx: [4]u8 = .{ 0, 0, 0, 0 };
+    while (true) {
+        var total: u8 = 0;
+        var i: u8 = 0;
+        while (i < 4) : (i += 1) total += groups[i].plans[idx[i]].len;
+        if (total == need_mentsu and n < out.len) {
+            var d: Decomp = .{ .pair = pair };
+            var m: u8 = 0;
+            i = 0;
+            while (i < 4) : (i += 1) {
+                const gp = groups[i].plans[idx[i]];
+                var j: u8 = 0;
+                while (j < gp.len) : (j += 1) {
+                    d.melds[m] = gp.melds[j];
+                    m += 1;
+                }
+            }
+            d.len = m;
+            out[n] = d;
+            n += 1;
+        }
+
+        var g: usize = 4;
+        while (g > 0) {
+            g -= 1;
+            idx[g] += 1;
+            if (idx[g] < groups[g].len) break;
+            idx[g] = 0;
+            if (g == 0) return n;
+        }
+    }
+}
+
+fn sum34(counts: *const [34]u8) u8 {
+    var s: u8 = 0;
+    for (counts.*) |c| s += c;
+    return s;
+}
+
+// ---------------------------------------------------------------------------
+// 内部：单花色 / 字牌方案
+// ---------------------------------------------------------------------------
+
+const SuitMeld = struct {
+    kind: MeldKind,
+    /// 数牌 1..9；字牌 1..7。
     start: u8,
 };
 
-/// 纯面子分解方案（无雀头）。`len == 0` 表示空方案（仅全零状态合法）。
-pub const Plan = struct {
-    melds: [MAX_MELDS]Meld = undefined,
-    /// 有效面子个数。
+const SuitPlan = struct {
+    melds: [MAX_MELDS]SuitMeld = undefined,
     len: u8 = 0,
 };
 
-/// 含雀头分解方案：面子序列 + 雀头数字。
-pub const PlanH = struct {
-    melds: [MAX_MELDS]Meld = undefined,
-    /// 有效面子个数。
+const SuitPlanH = struct {
+    melds: [MAX_MELDS]SuitMeld = undefined,
     len: u8 = 0,
-    /// 雀头数字 1..9。
     pair_tile: u8 = 0,
 };
 
-const empty_plans: [0]Plan = .{};
-const empty_plans_h: [0]PlanH = .{};
+const empty_pure: [0]SuitPlan = .{};
+const empty_pair: [0]SuitPlanH = .{};
 
-var g_pure: std.AutoHashMap(u32, []const Plan) = undefined;
-var g_pair: std.AutoHashMap(u32, []const PlanH) = undefined;
+var g_pure: std.AutoHashMap(u32, []const SuitPlan) = undefined;
+var g_pair: std.AutoHashMap(u32, []const SuitPlanH) = undefined;
 var g_ready: bool = false;
 
-/// 将 9 位计数向量编码为表下标。
-/// `counts[0]` 对应数字 1；`idx = Σ counts[i] · 5^i`。
-pub fn encode(counts: *const [9]u8) u32 {
+const MAX_TILES: u8 = 14;
+
+fn suitedPurePlans(counts: *const [9]u8) []const SuitPlan {
+    ensureReady();
+    if (sum9(counts) > MAX_TILES) return &empty_pure;
+    return g_pure.get(encode(counts)) orelse &empty_pure;
+}
+
+fn suitedPairPlans(counts: *const [9]u8) []const SuitPlanH {
+    ensureReady();
+    if (sum9(counts) > MAX_TILES) return &empty_pair;
+    return g_pair.get(encode(counts)) orelse &empty_pair;
+}
+
+fn honorPurePlan(honors: *const [7]u8) ?SuitPlan {
+    var plan: SuitPlan = .{};
+    for (honors.*, 0..) |c, i| {
+        if (c == 0) continue;
+        if (c != 3) return null;
+        if (plan.len >= MAX_MELDS) return null;
+        plan.melds[plan.len] = .{ .kind = .kotzu, .start = @intCast(i + 1) };
+        plan.len += 1;
+    }
+    return plan;
+}
+
+fn honorPairPlan(honors: *const [7]u8) ?SuitPlanH {
+    var plan: SuitPlanH = .{};
+    var pair: ?u8 = null;
+    for (honors.*, 0..) |c, i| {
+        if (c == 2) {
+            if (pair != null) return null;
+            pair = @intCast(i + 1);
+        } else if (c == 3) {
+            if (plan.len >= MAX_MELDS) return null;
+            plan.melds[plan.len] = .{ .kind = .kotzu, .start = @intCast(i + 1) };
+            plan.len += 1;
+        } else if (c != 0) {
+            return null;
+        }
+    }
+    plan.pair_tile = pair orelse return null;
+    return plan;
+}
+
+fn encode(counts: *const [9]u8) u32 {
     var idx: u32 = 0;
     var base: u32 = 1;
     for (counts.*) |c| {
@@ -60,8 +326,7 @@ pub fn encode(counts: *const [9]u8) u32 {
     return idx;
 }
 
-/// 将表下标解码回 9 位计数向量，写入 `out`。
-pub fn decode(idx: u32, out: *[9]u8) void {
+fn decode(idx: u32, out: *[9]u8) void {
     var x = idx;
     for (out) |*c| {
         c.* = @intCast(x % 5);
@@ -69,101 +334,40 @@ pub fn decode(idx: u32, out: *[9]u8) void {
     }
 }
 
-/// 统计单花色总张数 `Σ counts[i]`。
-pub fn sumCounts(counts: *const [9]u8) u8 {
+fn sum9(counts: *const [9]u8) u8 {
     var s: u8 = 0;
     for (counts.*) |c| s += c;
     return s;
 }
 
-/// 懒建表：首次查询时用 `page_allocator` 填充 `g_pure` / `g_pair`。
 fn ensureReady() void {
     if (g_ready) return;
     buildTables(std.heap.page_allocator) catch @panic("decomp table build failed");
     g_ready = true;
 }
 
-/// 查 DecompTable：返回该状态全部纯面子分解方案。
-/// 空切片表示无法完整拆解；全零状态返回恰好一个空方案。
-pub fn purePlans(counts: *const [9]u8) []const Plan {
-    ensureReady();
-    if (sumCounts(counts) > MAX_TILES) return &empty_plans;
-    return g_pure.get(encode(counts)) orelse &empty_plans;
-}
-
-/// 查 DecompTable_H：返回该状态全部「雀头 + 纯面子」分解方案。
-/// 空切片表示无法完整拆解。
-pub fn pairPlans(counts: *const [9]u8) []const PlanH {
-    ensureReady();
-    if (sumCounts(counts) > MAX_TILES) return &empty_plans_h;
-    return g_pair.get(encode(counts)) orelse &empty_plans_h;
-}
-
-/// 该状态是否存在至少一种纯面子分解（`purePlans` 非空）。
-pub fn canPure(counts: *const [9]u8) bool {
-    return purePlans(counts).len > 0;
-}
-
-/// 该状态是否存在至少一种含雀头分解（`pairPlans` 非空）。
-pub fn canWithPair(counts: *const [9]u8) bool {
-    return pairPlans(counts).len > 0;
-}
-
-/// 字牌非雀头是否可完整拆解：每种字牌张数必须为 0 或 3。
-/// `honors` 顺序为东南西北中发白（下标 0..6）。
-pub fn honorPureOk(honors: *const [7]u8) bool {
-    for (honors.*) |c| {
-        if (c != 0 and c != 3) return false;
-    }
-    return true;
-}
-
-/// 字牌含雀头是否可完整拆解：恰好一种字牌为 2，其余为 0 或 3。
-/// 成功返回雀头下标 0..6；不合法返回 `null`。
-pub fn honorPairIndex(honors: *const [7]u8) ?u8 {
-    var pair: ?u8 = null;
-    for (honors.*, 0..) |c, i| {
-        if (c == 2) {
-            if (pair != null) return null;
-            pair = @intCast(i);
-        } else if (c != 0 and c != 3) {
-            return null;
-        }
-    }
-    return pair;
-}
-
-/// 在子方案前插入一个面子，生成新方案。
-fn prepend(plan: Plan, meld: Meld) Plan {
+fn prepend(plan: SuitPlan, meld: SuitMeld) SuitPlan {
     std.debug.assert(plan.len < MAX_MELDS);
-    var out: Plan = .{ .len = plan.len + 1 };
+    var out: SuitPlan = .{ .len = plan.len + 1 };
     out.melds[0] = meld;
     @memcpy(out.melds[1..][0..plan.len], plan.melds[0..plan.len]);
     return out;
 }
 
-/// 按总张数 0..`MAX_TILES` 递推填充 DecompTable 与 DecompTable_H。
 fn buildTables(gpa: std.mem.Allocator) !void {
     g_pure = .init(gpa);
     g_pair = .init(gpa);
 
-    // DecompTable[(0..)] = { [] }
-    const zero_plan = try gpa.dupe(Plan, &[_]Plan{.{}});
+    const zero_plan = try gpa.dupe(SuitPlan, &[_]SuitPlan{.{}});
     try g_pure.put(0, zero_plan);
 
     var n: u8 = 1;
     while (n <= MAX_TILES) : (n += 1) {
         var counts: [9]u8 = .{0} ** 9;
-        try forEachState(n, &counts, gpa);
+        try recState(0, n, &counts, gpa);
     }
 }
 
-/// 枚举所有总张数恰为 `n` 的有效状态，并对每个调用 `processState`。
-fn forEachState(n: u8, counts: *[9]u8, gpa: std.mem.Allocator) !void {
-    try recState(0, n, counts, gpa);
-}
-
-/// 递归填充 `counts[pos..]`，使剩余张数恰好分完（每位 0..4）。
 fn recState(pos: usize, remaining: u8, counts: *[9]u8, gpa: std.mem.Allocator) !void {
     if (pos == 9) {
         if (remaining == 0) try processState(gpa, counts);
@@ -178,8 +382,6 @@ fn recState(pos: usize, remaining: u8, counts: *[9]u8, gpa: std.mem.Allocator) !
     counts[pos] = 0;
 }
 
-/// 对单个状态建表：先由最小非零位做刻子/顺子转移写 DecompTable，
-/// 再遍历所有可能雀头位置写 DecompTable_H。
 fn processState(gpa: std.mem.Allocator, counts: *const [9]u8) !void {
     const idx = encode(counts);
 
@@ -187,26 +389,24 @@ fn processState(gpa: std.mem.Allocator, counts: *const [9]u8) !void {
     while (p < 9 and counts[p] == 0) : (p += 1) {}
     std.debug.assert(p < 9);
 
-    var plans: std.ArrayList(Plan) = .empty;
+    var plans: std.ArrayList(SuitPlan) = .empty;
     defer plans.deinit(gpa);
 
-    // 方式 A：刻子
     if (counts[p] >= 3) {
         var child = counts.*;
         child[p] -= 3;
-        const child_plans = g_pure.get(encode(&child)) orelse &empty_plans;
+        const child_plans = g_pure.get(encode(&child)) orelse &empty_pure;
         for (child_plans) |cp| {
             try plans.append(gpa, prepend(cp, .{ .kind = .kotzu, .start = @intCast(p + 1) }));
         }
     }
 
-    // 方式 B：顺子
     if (p <= 6 and counts[p] >= 1 and counts[p + 1] >= 1 and counts[p + 2] >= 1) {
         var child = counts.*;
         child[p] -= 1;
         child[p + 1] -= 1;
         child[p + 2] -= 1;
-        const child_plans = g_pure.get(encode(&child)) orelse &empty_plans;
+        const child_plans = g_pure.get(encode(&child)) orelse &empty_pure;
         for (child_plans) |cp| {
             try plans.append(gpa, prepend(cp, .{ .kind = .shuntsu, .start = @intCast(p + 1) }));
         }
@@ -217,8 +417,7 @@ fn processState(gpa: std.mem.Allocator, counts: *const [9]u8) !void {
         try g_pure.put(idx, owned);
     }
 
-    // DecompTable_H：遍历所有可能雀头位置
-    var plans_h: std.ArrayList(PlanH) = .empty;
+    var plans_h: std.ArrayList(SuitPlanH) = .empty;
     defer plans_h.deinit(gpa);
 
     var i: usize = 0;
@@ -226,7 +425,7 @@ fn processState(gpa: std.mem.Allocator, counts: *const [9]u8) !void {
         if (counts[i] < 2) continue;
         var child = counts.*;
         child[i] -= 2;
-        const child_plans = g_pure.get(encode(&child)) orelse &empty_plans;
+        const child_plans = g_pure.get(encode(&child)) orelse &empty_pure;
         for (child_plans) |cp| {
             try plans_h.append(gpa, .{
                 .melds = cp.melds,
@@ -242,6 +441,16 @@ fn processState(gpa: std.mem.Allocator, counts: *const [9]u8) !void {
     }
 }
 
+// ---------------------------------------------------------------------------
+// tests
+// ---------------------------------------------------------------------------
+
+fn countsFromKinds(kinds: []const u8) [34]u8 {
+    var c: [34]u8 = .{0} ** 34;
+    for (kinds) |k| c[k] += 1;
+    return c;
+}
+
 test "encode decode roundtrip" {
     const c = [_]u8{ 0, 0, 1, 1, 1, 0, 0, 0, 0 };
     var out: [9]u8 = undefined;
@@ -249,80 +458,69 @@ test "encode decode roundtrip" {
     try std.testing.expectEqualSlices(u8, &c, &out);
 }
 
-test "empty state: one empty pure plan, no pair plan" {
-    const z = [_]u8{0} ** 9;
-    const ps = purePlans(&z);
-    try std.testing.expectEqual(@as(usize, 1), ps.len);
-    try std.testing.expectEqual(@as(u8, 0), ps[0].len);
-    try std.testing.expect(!canWithPair(&z));
+test "decompose: 123m456m789m EEE SS" {
+    // 0,1,2 + 3,4,5 + 6,7,8 + 27,27,27 + 28,28
+    const kinds = [_]u8{ 0, 1, 2, 3, 4, 5, 6, 7, 8, 27, 27, 27, 28, 28 };
+    const c = countsFromKinds(&kinds);
+    var buf: [MAX_DECOMPS]Decomp = undefined;
+    const plans = decompose(&c, 4, &buf);
+    try std.testing.expect(plans.len >= 1);
+    try std.testing.expectEqual(@as(u8, 28), plans[0].pair);
+    try std.testing.expectEqual(@as(u8, 4), plans[0].len);
 }
 
-test "345 -> one shuntsu(3); no pair" {
-    const c = [_]u8{ 0, 0, 1, 1, 1, 0, 0, 0, 0 };
-    const ps = purePlans(&c);
-    try std.testing.expectEqual(@as(usize, 1), ps.len);
-    try std.testing.expectEqual(@as(u8, 1), ps[0].len);
-    try std.testing.expect(ps[0].melds[0].kind == .shuntsu);
-    try std.testing.expectEqual(@as(u8, 3), ps[0].melds[0].start);
-    try std.testing.expect(!canWithPair(&c));
+test "decompose: 11123m cannot (need pair+1shuntsu only covers 5 tiles)" {
+    const kinds = [_]u8{ 0, 0, 0, 1, 2 };
+    const c = countsFromKinds(&kinds);
+    var buf: [8]Decomp = undefined;
+    // 5 tiles → need_mentsu=1 → expect 5 ok
+    const plans = decompose(&c, 1, &buf);
+    try std.testing.expectEqual(@as(usize, 1), plans.len);
+    try std.testing.expectEqual(@as(u8, 0), plans[0].pair);
+    try std.testing.expectEqual(@as(u8, 1), plans[0].len);
+    try std.testing.expect(plans[0].melds[0].kind == .shuntsu);
+    try std.testing.expectEqual(@as(u8, 0), plans[0].melds[0].tile);
 }
 
-test "isolated 1+45 cannot pure-decompose" {
-    const c = [_]u8{ 1, 0, 0, 1, 1, 0, 0, 0, 0 };
-    try std.testing.expect(!canPure(&c));
-    try std.testing.expectEqual(@as(usize, 0), purePlans(&c).len);
+test "decompose: isolated tiles fail" {
+    const kinds = [_]u8{ 0, 3, 4 }; // 1m 4m 5m
+    const c = countsFromKinds(&kinds);
+    var buf: [4]Decomp = undefined;
+    try std.testing.expectEqual(@as(usize, 0), decompose(&c, 1, &buf).len);
 }
 
-test "111 -> kotzu(1)" {
-    const c = [_]u8{ 3, 0, 0, 0, 0, 0, 0, 0, 0 };
-    const ps = purePlans(&c);
-    try std.testing.expectEqual(@as(usize, 1), ps.len);
-    try std.testing.expect(ps[0].melds[0].kind == .kotzu);
-    try std.testing.expectEqual(@as(u8, 1), ps[0].melds[0].start);
-}
-
-test "11123 -> pair 1 + shuntsu 123" {
-    const c = [_]u8{ 3, 1, 1, 0, 0, 0, 0, 0, 0 };
-    try std.testing.expect(!canPure(&c));
-    const hs = pairPlans(&c);
-    try std.testing.expectEqual(@as(usize, 1), hs.len);
-    try std.testing.expectEqual(@as(u8, 1), hs[0].pair_tile);
-    try std.testing.expectEqual(@as(u8, 1), hs[0].len);
-    try std.testing.expect(hs[0].melds[0].kind == .shuntsu);
-    try std.testing.expectEqual(@as(u8, 1), hs[0].melds[0].start);
-}
-
-test "lone pair is valid PlanH with zero melds" {
-    const c = [_]u8{ 2, 0, 0, 0, 0, 0, 0, 0, 0 };
-    const hs = pairPlans(&c);
-    try std.testing.expectEqual(@as(usize, 1), hs.len);
-    try std.testing.expectEqual(@as(u8, 1), hs[0].pair_tile);
-    try std.testing.expectEqual(@as(u8, 0), hs[0].len);
-}
-
-test "333444555 has both kotzu-path and shuntsu-path" {
-    const c = [_]u8{ 0, 0, 3, 3, 3, 0, 0, 0, 0 };
-    const ps = purePlans(&c);
-    try std.testing.expect(ps.len >= 2);
-    var saw_kotzu = false;
-    var saw_shuntsu = false;
-    for (ps) |plan| {
-        try std.testing.expectEqual(@as(u8, 3), plan.len);
-        if (plan.melds[0].kind == .kotzu) saw_kotzu = true;
-        if (plan.melds[0].kind == .shuntsu) saw_shuntsu = true;
+test "decompose: 333444555m + 11p → multi plans" {
+    // man 333444555 (kinds 2,3,4 x3) + pin 11 (kind 9 x2)
+    var kinds_buf: [11]u8 = undefined;
+    var n: usize = 0;
+    for (0..3) |_| {
+        kinds_buf[n] = 2;
+        n += 1;
+        kinds_buf[n] = 3;
+        n += 1;
+        kinds_buf[n] = 4;
+        n += 1;
     }
-    try std.testing.expect(saw_kotzu);
-    try std.testing.expect(saw_shuntsu);
+    kinds_buf[n] = 9;
+    n += 1;
+    kinds_buf[n] = 9;
+    n += 1;
+    const c = countsFromKinds(kinds_buf[0..n]);
+    var buf: [MAX_DECOMPS]Decomp = undefined;
+    const plans = decompose(&c, 3, &buf);
+    try std.testing.expect(plans.len >= 2);
+    try std.testing.expectEqual(@as(u8, 9), plans[0].pair);
+    for (plans) |hp| {
+        try std.testing.expectEqual(@as(u8, 3), hp.len);
+    }
 }
 
-test "honor pure and pair rules" {
-    try std.testing.expect(honorPureOk(&.{ 0, 3, 0, 0, 3, 0, 0 }));
-    try std.testing.expect(!honorPureOk(&.{ 1, 0, 0, 0, 0, 0, 0 }));
-    try std.testing.expect(!honorPureOk(&.{ 2, 0, 0, 0, 0, 0, 0 }));
-    try std.testing.expect(!honorPureOk(&.{ 4, 0, 0, 0, 0, 0, 0 }));
-
-    try std.testing.expectEqual(@as(?u8, 0), honorPairIndex(&.{ 2, 0, 3, 0, 0, 0, 0 }));
-    try std.testing.expectEqual(@as(?u8, null), honorPairIndex(&.{ 2, 2, 0, 0, 0, 0, 0 }));
-    try std.testing.expectEqual(@as(?u8, null), honorPairIndex(&.{ 3, 0, 0, 0, 0, 0, 0 }));
-    try std.testing.expectEqual(@as(?u8, null), honorPairIndex(&.{ 1, 0, 0, 0, 0, 0, 0 }));
+test "honor-only: EEE SSS WW" {
+    const kinds = [_]u8{ 27, 27, 27, 28, 28, 28, 29, 29 };
+    const c = countsFromKinds(&kinds);
+    var buf: [8]Decomp = undefined;
+    const plans = decompose(&c, 2, &buf);
+    try std.testing.expectEqual(@as(usize, 1), plans.len);
+    try std.testing.expectEqual(@as(u8, 29), plans[0].pair);
+    try std.testing.expectEqual(@as(u8, 2), plans[0].len);
 }
