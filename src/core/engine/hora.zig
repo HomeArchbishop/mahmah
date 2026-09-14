@@ -2,7 +2,7 @@
 const types = @import("../types.zig");
 const kyoku_mod = @import("../kyoku.zig");
 const round = @import("round.zig");
-const score = @import("score.zig");
+const referee = @import("referee/root.zig");
 const window = @import("response_window.zig");
 const Kyoku = kyoku_mod.Kyoku;
 const Event = types.Event;
@@ -17,7 +17,7 @@ pub fn applyTsumo(ky: *Kyoku, seat: Seat, out: []Event) ApplyError![]Event {
     n += 1;
 
     const winners = [_]Seat{seat};
-    score.applyHoraScores(&ky.scores, &winners, seat, ky.oya, ky.honba, ky.kyotaku, true);
+    referee.score.applyHoraScores(&ky.scores, &winners, seat, ky.oya, ky.honba, ky.kyotaku, true);
     ky.kyotaku = 0;
 
     const renchan = seat == ky.oya;
@@ -38,7 +38,7 @@ pub fn applyRon(ky: *Kyoku, winners: []const Seat, out: []Event) ApplyError![]Ev
         n += 1;
     }
 
-    score.applyHoraScores(&ky.scores, winners, from, ky.oya, ky.honba, ky.kyotaku, false);
+    referee.score.applyHoraScores(&ky.scores, winners, from, ky.oya, ky.honba, ky.kyotaku, false);
     ky.kyotaku = 0;
 
     var dealer_win = false;

@@ -1,4 +1,4 @@
-const types = @import("../types.zig");
+const types = @import("../../types.zig");
 const Seat = types.Seat;
 const CAPACITY = types.CAPACITY;
 

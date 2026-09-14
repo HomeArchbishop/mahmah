@@ -1,6 +1,6 @@
 //! 牌形检测：和形、九种九牌等。
-const pai_util = @import("pai.zig");
-const types = @import("../types.zig");
+const pai_util = @import("../pai.zig");
+const types = @import("../../types.zig");
 const Pai = types.Pai;
 
 /// 标准型 / 七对 / 国士：闭张手牌能否和了（已含所和之牌）。

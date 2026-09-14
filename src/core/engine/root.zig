@@ -4,7 +4,7 @@ const types = @import("../types.zig");
 const kyoku_mod = @import("../kyoku.zig");
 const round = @import("round.zig");
 const apply_mod = @import("apply.zig");
-const score = @import("score.zig");
+const referee = @import("referee/root.zig");
 const legal = @import("legal.zig");
 const window = @import("response_window.zig");
 
@@ -71,7 +71,7 @@ pub fn chombo(ky: *Kyoku, offender: Seat, reason: []const u8, out: []Event) []Ev
     var n: usize = 0;
     out[n] = .{ .ryukyoku = .{
         .reason = reason,
-        .deltas = score.chomboDeltas(offender, ky.oya),
+        .deltas = referee.score.chomboDeltas(offender, ky.oya),
     } };
     n += 1;
     return round.afterKyokuEnd(ky, out, n);
@@ -79,6 +79,7 @@ pub fn chombo(ky: *Kyoku, offender: Seat, reason: []const u8, out: []Event) []Ev
 
 test {
     _ = @import("wall.zig");
+    _ = @import("referee/root.zig");
 }
 
 test "onStartGame deals 13 and draws for oya" {

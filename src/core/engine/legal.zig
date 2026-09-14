@@ -1,7 +1,7 @@
 const types = @import("../types.zig");
 const kyoku_mod = @import("../kyoku.zig");
 const pai_util = @import("pai.zig");
-const shape = @import("shape.zig");
+const referee = @import("referee/root.zig");
 const round = @import("round.zig");
 const Kyoku = kyoku_mod.Kyoku;
 const Action = types.Action;
@@ -29,7 +29,7 @@ fn legalWaitAct(ky: *const Kyoku, seat: Seat, out: []Action) []Action {
     }
 
     // 自摸和
-    if (ky.drawn != null and shape.canAgari(ky.handSlice(seat), p.fuuro_len)) {
+    if (ky.drawn != null and referee.shape.canAgari(ky.handSlice(seat), p.fuuro_len)) {
         if (n < out.len) {
             out[n] = .{ .hora = .{ .target = seat, .pai = ky.drawn } };
             n += 1;
@@ -40,7 +40,7 @@ fn legalWaitAct(ky: *const Kyoku, seat: Seat, out: []Action) []Action {
     if (ky.is_first_turn and p.river_len == 0 and p.fuuro_len == 0 and ky.drawn != null) {
         // 起手+摸：14 张里看 13 张闭张的幺九种（不含摸？规则是配牌 13 张）
         const closed13 = if (p.tehai_len > 0) p.tehai[0 .. p.tehai_len - 1] else p.tehai[0..0];
-        if (shape.kyushuKinds(closed13) >= 9) {
+        if (referee.shape.kyushuKinds(closed13) >= 9) {
             if (n < out.len) {
                 out[n] = .ryukyoku;
                 n += 1;
@@ -177,7 +177,7 @@ fn canRon(ky: *const Kyoku, seat: Seat, pai: Pai) bool {
     if (p.riichi) {
         // 立直后可荣
     }
-    return shape.canWinWith(ky.handSlice(seat), pai, p.fuuro_len);
+    return referee.shape.canWinWith(ky.handSlice(seat), pai, p.fuuro_len);
 }
 
 fn appendPonKan(ky: *const Kyoku, seat: Seat, pai: Pai, out: []Action, start: usize) usize {
