@@ -122,6 +122,11 @@ pub fn suitedLiteral(r: u8, s: u8) Pai {
     };
 }
 
+/// 是否赤宝（`5mr` / `5pr` / `5sr`）。
+pub fn isRed(pai: Pai) bool {
+    return pai.len >= 3 and pai[pai.len - 1] == 'r';
+}
+
 pub fn countKind(hand: []const Pai, target: Pai) u8 {
     var n: u8 = 0;
     for (hand) |p| {
@@ -133,18 +138,17 @@ pub fn countKind(hand: []const Pai, target: Pai) u8 {
 /// 手牌中取出与 target 同种的最多 `want` 张（优先非赤）。
 pub fn takeKinds(hand: []const Pai, target: Pai, want: u8, out: []Pai) u8 {
     var n: u8 = 0;
-    // 先非赤
     for (hand) |p| {
         if (n >= want) break;
         if (!sameKind(p, target)) continue;
-        if (p.len >= 3 and p[p.len - 1] == 'r') continue;
+        if (isRed(p)) continue;
         out[n] = p;
         n += 1;
     }
     for (hand) |p| {
         if (n >= want) break;
         if (!sameKind(p, target)) continue;
-        if (!(p.len >= 3 and p[p.len - 1] == 'r')) continue;
+        if (!isRed(p)) continue;
         out[n] = p;
         n += 1;
     }

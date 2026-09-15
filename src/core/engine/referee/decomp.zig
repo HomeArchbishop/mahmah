@@ -1,227 +1,446 @@
-//! 标准型面子分解：输入手牌计数，输出全部拆分方案。
-//! 数牌查表、字牌刻/对拆分为内部实现。
+//! 标准型和了拆解。
+//!
+//! # 术语
+//! - **进张** `winning`：自摸为 `drawn`，荣和为 `last_discard`
+//! - **闭张** `closed`：不含副露的手牌（荣和时含进张）
+//! - **结构** `Shape`：雀头 + 若干闭张面子（尚无进张归属、无副露）
+//! - **块** `Block`：雀头 / 闭张面子 / 副露之一
+//! - **拆解** `AgariDecomp`：恰 5 块（雀头 → 闭张面子 → 副露）
+//!
+//! # 流程 `agariDecomps`
+//! 1. 取进张；组闭张；`need_mentsu = 4 - fuuro_len`
+//! 2. 枚举闭张结构
+//! 3. 进张落入哪个闭张块 → 各物化成一条拆解
 const std = @import("std");
+const types = @import("../../types.zig");
+const kyoku_mod = @import("../../kyoku.zig");
+const pai_util = @import("../pai.zig");
 
-/// 闭张内最多面子数。
-pub const MAX_MELDS: u8 = 4;
-/// 单次 `decompose` 组合展开上限（防止极端牌姿写爆缓冲）。
-const MAX_DECOMPS: usize = 64;
+const Pai = types.Pai;
+const Seat = types.Seat;
+const Kyoku = kyoku_mod.Kyoku;
+
+/// 一条拆解的块数：雀头 + 4 面子（含副露）。
+pub const BLOCKS: u8 = 5;
+/// 闭张最多面子数。
+const MAX_MENTSU: u8 = 4;
+/// 单次结构枚举上限。
+const MAX_SHAPES: usize = 64;
+
+/// 一块：雀头、闭张面子或副露。
+pub const Block = struct {
+    tiles: [4]Pai = undefined,
+    tile_len: u8 = 0,
+    is_pair: bool = false,
+    is_fuuro: bool = false,
+    /// 进张落入本块时为该牌，否则 null。
+    winning: ?Pai = null,
+    /// 仅 `winning != null` 时表示进张是否来自自摸。
+    winning_tsumo: bool = false,
+};
+
+/// 一条完整拆解（恰 `BLOCKS` 块）。
+pub const AgariDecomp = struct {
+    /// 顺序：雀头、闭张面子…、副露…
+    blocks: [BLOCKS]Block = [_]Block{.{}} ** BLOCKS,
+};
+
+/// 枚举座位标准和了的全部拆解（含进张归属）。七对/国士返回空。
+pub fn agariDecomps(ky: *const Kyoku, seat: Seat, tsumo: bool, out: []AgariDecomp) []AgariDecomp {
+    if (out.len == 0) return out[0..0];
+
+    const winning = (if (tsumo) ky.drawn else ky.last_discard) orelse return out[0..0];
+    const winning_kind = pai_util.kindId(winning) orelse return out[0..0];
+
+    const player = &ky.players[seat];
+    if (player.fuuro_len > MAX_MENTSU) return out[0..0];
+    const need_mentsu: u8 = MAX_MENTSU - player.fuuro_len;
+
+    var closed_buf: [14]Pai = undefined;
+    const closed = collectClosed(ky, seat, tsumo, winning, &closed_buf) orelse return out[0..0];
+
+    var counts: [34]u8 = .{0} ** 34;
+    for (closed) |tile| {
+        counts[pai_util.kindId(tile) orelse return out[0..0]] += 1;
+    }
+
+    var shapes_buf: [MAX_SHAPES]Shape = undefined;
+    const shapes = enumerateShapes(&counts, need_mentsu, &shapes_buf);
+
+    var n: usize = 0;
+    for (shapes) |shape| {
+        // block_i：0 = 雀头，1.. = 闭张面子；副露不承担进张
+        var block_i: u8 = 0;
+        while (block_i < 1 + shape.mentsu_len) : (block_i += 1) {
+            const accepts = if (block_i == 0)
+                shape.pair_kind == winning_kind
+            else
+                mentsuContains(shape.mentsu[block_i - 1], winning_kind);
+            if (!accepts) continue;
+            if (n >= out.len) return out[0..n];
+            out[n] = materialize(closed, player, shape, winning, tsumo, block_i);
+            n += 1;
+        }
+    }
+    return out[0..n];
+}
+
+/// 组装闭张牌列：自摸用手牌；荣和为手牌 + 进张。
+fn collectClosed(
+    ky: *const Kyoku,
+    seat: Seat,
+    tsumo: bool,
+    winning: Pai,
+    buf: *[14]Pai,
+) ?[]const Pai {
+    const hand = ky.handSlice(seat);
+    if (tsumo) {
+        if (hand.len > 14) return null;
+        return hand;
+    }
+    if (hand.len >= 14) return null;
+    @memcpy(buf[0..hand.len], hand);
+    buf[hand.len] = winning;
+    return buf[0 .. hand.len + 1];
+}
+
+// ---------------------------------------------------------------------------
+// 物化：结构 + 进张归属 → AgariDecomp
+// ---------------------------------------------------------------------------
+
+/// 将一种结构写成 5 块，并把进张标在 `winning_block`（0=雀头，其余为闭张面子下标+1）。
+fn materialize(
+    closed: []const Pai,
+    player: *const kyoku_mod.Player,
+    shape: Shape,
+    winning: Pai,
+    tsumo: bool,
+    winning_block: u8,
+) AgariDecomp {
+    var used: [14]bool = .{false} ** 14;
+    var result: AgariDecomp = .{};
+    var bi: u8 = 0;
+
+    result.blocks[bi] = fillClosedBlock(
+        &used,
+        closed,
+        pairKindList(shape.pair_kind),
+        true,
+        winning,
+        tsumo,
+        winning_block == 0,
+    );
+    bi += 1;
+
+    var mi: u8 = 0;
+    while (mi < shape.mentsu_len) : (mi += 1) {
+        result.blocks[bi] = fillClosedBlock(
+            &used,
+            closed,
+            mentsuKindList(shape.mentsu[mi]),
+            false,
+            winning,
+            tsumo,
+            winning_block == 1 + mi,
+        );
+        bi += 1;
+    }
+
+    var fi: u8 = 0;
+    while (fi < player.fuuro_len) : (fi += 1) {
+        const f = player.fuuro[fi];
+        result.blocks[bi] = .{ .is_fuuro = true, .tile_len = f.tile_len };
+        @memcpy(result.blocks[bi].tiles[0..f.tile_len], f.tiles[0..f.tile_len]);
+        bi += 1;
+    }
+
+    std.debug.assert(bi == BLOCKS);
+    return result;
+}
+
+/// 一块所需的牌种列表（至多 3 个）。
+const KindList = struct {
+    kinds: [3]u8 = undefined,
+    len: u8 = 0,
+};
+
+/// 雀头对应的两张同种牌。
+fn pairKindList(pair_kind: u8) KindList {
+    return .{ .kinds = .{ pair_kind, pair_kind, 0 }, .len = 2 };
+}
+
+/// 面子对应的三张牌种（刻子三同；顺子连续）。
+fn mentsuKindList(m: Mentsu) KindList {
+    return switch (m.kind) {
+        .kotzu => .{ .kinds = .{ m.tile, m.tile, m.tile }, .len = 3 },
+        .shuntsu => .{ .kinds = .{ m.tile, m.tile + 1, m.tile + 2 }, .len = 3 },
+    };
+}
+
+/// 从闭张池抽出一块的具体牌。
+/// 承担进张的块：进张牌面精确放入 `tiles[0]`（故进张为 `5mr` 时赤宝钉在该块）。
+/// 其余张按牌种抽取，与 `pai.takeKinds` 一样优先非赤。
+fn fillClosedBlock(
+    used: *[14]bool,
+    closed: []const Pai,
+    kind_list: KindList,
+    is_pair: bool,
+    winning: Pai,
+    tsumo: bool,
+    takes_winning: bool,
+) Block {
+    var kinds = kind_list.kinds;
+    var klen = kind_list.len;
+    var block: Block = .{
+        .is_pair = is_pair,
+        .winning = if (takes_winning) winning else null,
+        .winning_tsumo = takes_winning and tsumo,
+    };
+
+    if (takes_winning) {
+        const wk = pai_util.kindId(winning).?;
+        removeOneKind(&kinds, &klen, wk);
+        block.tiles[0] = winning;
+        block.tile_len = 1;
+        if (!takeExact(used, closed, winning)) {
+            _ = takeByKind(used, closed, wk);
+        }
+    }
+
+    var i: u8 = 0;
+    while (i < klen) : (i += 1) {
+        block.tiles[block.tile_len] = takeByKind(used, closed, kinds[i]) orelse "?";
+        block.tile_len += 1;
+    }
+    return block;
+}
+
+/// 从 `kinds[0..len]` 去掉一个等于 `kind` 的项。
+fn removeOneKind(kinds: *[3]u8, len: *u8, kind: u8) void {
+    var i: u8 = 0;
+    while (i < len.*) : (i += 1) {
+        if (kinds[i] == kind) {
+            var j = i;
+            while (j + 1 < len.*) : (j += 1) kinds[j] = kinds[j + 1];
+            len.* -= 1;
+            return;
+        }
+    }
+}
+
+/// 从未使用闭张中取走与 `want` 牌面完全相同的一张。
+fn takeExact(used: *[14]bool, closed: []const Pai, want: Pai) bool {
+    for (closed, 0..) |tile, i| {
+        if (used[i]) continue;
+        if (types.paiEql(tile, want)) {
+            used[i] = true;
+            return true;
+        }
+    }
+    return false;
+}
+
+/// 从未使用闭张中取走一张指定牌种（优先非赤，与 `pai.takeKinds` 一致）。
+fn takeByKind(used: *[14]bool, closed: []const Pai, kind: u8) ?Pai {
+    for (closed, 0..) |tile, i| {
+        if (used[i]) continue;
+        if (pai_util.kindId(tile) != kind) continue;
+        if (pai_util.isRed(tile)) continue;
+        used[i] = true;
+        return tile;
+    }
+    for (closed, 0..) |tile, i| {
+        if (used[i]) continue;
+        if (pai_util.kindId(tile) != kind) continue;
+        used[i] = true;
+        return tile;
+    }
+    return null;
+}
+
+/// 面子是否包含该牌种。
+fn mentsuContains(m: Mentsu, kind: u8) bool {
+    return switch (m.kind) {
+        .kotzu => m.tile == kind,
+        .shuntsu => kind >= m.tile and kind <= m.tile + 2 and kind / 9 == m.tile / 9,
+    };
+}
+
+// ---------------------------------------------------------------------------
+// 结构枚举：34 计数 → Shape 列表
+// ---------------------------------------------------------------------------
 
 /// 面子类型。
-pub const MeldKind = enum(u8) {
+const MentsuKind = enum(u8) {
     kotzu,
     shuntsu,
 };
 
-/// 整手中的一个面子（牌种为 0..33）。
-pub const Meld = struct {
-    kind: MeldKind,
-    /// 刻子：该牌种；顺子：起始牌种（同花色连续三张的最小）。
+/// 一个闭张面子（牌种 0..33）。
+const Mentsu = struct {
+    kind: MentsuKind,
+    /// 刻子：该牌种；顺子：起始牌种。
     tile: u8,
 };
 
-/// 一种完整标准型分解：雀头 + 闭张面子（不含副露）。
-pub const Decomp = struct {
-    /// 雀头牌种 0..33。
-    pair: u8,
-    melds: [MAX_MELDS]Meld = undefined,
-    len: u8 = 0,
+/// 一种闭张结构：雀头 + 闭张面子（不含副露、不含进张归属）。
+const Shape = struct {
+    pair_kind: u8,
+    mentsu: [MAX_MENTSU]Mentsu = undefined,
+    mentsu_len: u8 = 0,
 };
 
-/// 对闭张 34 计数做标准型分解。
-/// `need_mentsu` = `4 - fuuro_len`；要求 `Σ counts == 2 + 3 * need_mentsu`。
-/// 写入 `out`，返回实际写出的子切片（可能被截断到 `out.len`）。
-pub fn decompose(counts: *const [34]u8, need_mentsu: u8, out: []Decomp) []Decomp {
-    if (need_mentsu > MAX_MELDS) return out[0..0];
-    const expect: u8 = 2 + 3 * need_mentsu;
-    if (sum34(counts) != expect) return out[0..0];
-
-    var man: [9]u8 = undefined;
-    var pin: [9]u8 = undefined;
-    var sou: [9]u8 = undefined;
-    var hon: [7]u8 = undefined;
-    @memcpy(&man, counts[0..9]);
-    @memcpy(&pin, counts[9..18]);
-    @memcpy(&sou, counts[18..27]);
-    @memcpy(&hon, counts[27..34]);
+/// 枚举所有「雀头 + need_mentsu 个面子」的标准型结构。
+fn enumerateShapes(counts: *const [34]u8, need_mentsu: u8, out: []Shape) []Shape {
+    if (need_mentsu > MAX_MENTSU) return out[0..0];
+    var sum: u8 = 0;
+    for (counts.*) |c| sum += c;
+    if (sum != 2 + 3 * need_mentsu) return out[0..0];
 
     var n: usize = 0;
     var pair_kind: u8 = 0;
     while (pair_kind < 34) : (pair_kind += 1) {
         if (counts[pair_kind] < 2) continue;
-        n = emitWithPair(pair_kind, &man, &pin, &sou, &hon, need_mentsu, out, n);
+        n = appendShapesWithPair(pair_kind, counts, need_mentsu, out, n);
         if (n >= out.len) break;
     }
     return out[0..n];
 }
 
-fn emitWithPair(
+/// 固定雀头后，对四组（万/筒/索/字）方案做笛卡尔积，写入 `out`。
+fn appendShapesWithPair(
     pair_kind: u8,
-    man: *const [9]u8,
-    pin: *const [9]u8,
-    sou: *const [9]u8,
-    hon: *const [7]u8,
+    counts: *const [34]u8,
     need_mentsu: u8,
-    out: []Decomp,
+    out: []Shape,
     start: usize,
 ) usize {
-    // 各组方案：pair 组用含雀头，其余用纯面子
-    var g0: GroupPlans = undefined;
-    var g1: GroupPlans = undefined;
-    var g2: GroupPlans = undefined;
-    var g3: GroupPlans = undefined;
-    var groups = [_]*GroupPlans{ &g0, &g1, &g2, &g3 };
-
+    // 四组：万0 / 筒9 / 索18 / 字27
+    const groups_meta = [_]struct { base: u8, width: u8 }{
+        .{ .base = 0, .width = 9 },
+        .{ .base = 9, .width = 9 },
+        .{ .base = 18, .width = 9 },
+        .{ .base = 27, .width = 7 },
+    };
+    var groups: [4]Group = .{ .{}, .{}, .{}, .{} };
     const pair_group: u8 = if (pair_kind < 9) 0 else if (pair_kind < 18) 1 else if (pair_kind < 27) 2 else 3;
 
-    if (pair_group == 0) {
-        if (!fillSuitedPair(&g0, man, pair_kind - 0, 0)) return start;
-    } else {
-        if (!fillSuitedPure(&g0, man, 0)) return start;
+    for (groups_meta, 0..) |meta, gi| {
+        const g: u8 = @intCast(gi);
+        const local_pair: ?u8 = if (g == pair_group) pair_kind - meta.base else null;
+        if (meta.width == 9) {
+            var c9: [9]u8 = undefined;
+            @memcpy(&c9, counts[meta.base..][0..9]);
+            if (!fillSuitedGroup(&groups[g], &c9, meta.base, local_pair)) return start;
+        } else {
+            var c7: [7]u8 = undefined;
+            @memcpy(&c7, counts[27..34]);
+            if (!fillHonorGroup(&groups[g], &c7, if (local_pair != null) pair_kind else null)) return start;
+        }
     }
-    if (pair_group == 1) {
-        if (!fillSuitedPair(&g1, pin, pair_kind - 9, 9)) return start;
-    } else {
-        if (!fillSuitedPure(&g1, pin, 9)) return start;
-    }
-    if (pair_group == 2) {
-        if (!fillSuitedPair(&g2, sou, pair_kind - 18, 18)) return start;
-    } else {
-        if (!fillSuitedPure(&g2, sou, 18)) return start;
-    }
-    if (pair_group == 3) {
-        if (!fillHonorPair(&g3, hon, pair_kind)) return start;
-    } else {
-        if (!fillHonorPure(&g3, hon)) return start;
-    }
-
-    return product(pair_kind, &groups, need_mentsu, out, start);
+    return cartesianProduct(pair_kind, &groups, need_mentsu, out, start);
 }
 
-/// 一组花色/字牌的面子列表（中间结果，无雀头）。
-const MeldBag = struct {
-    melds: [MAX_MELDS]Meld = undefined,
-    len: u8 = 0,
+/// 一组花色/字牌内的一种面子组合（无雀头）。
+const GroupPlan = struct {
+    mentsu: [MAX_MENTSU]Mentsu = undefined,
+    mentsu_len: u8 = 0,
 };
 
-const GroupPlans = struct {
-    plans: [16]MeldBag = undefined,
-    len: u8 = 0,
+/// 一组花色/字牌的全部候选面子组合。
+const Group = struct {
+    plans: [16]GroupPlan = undefined,
+    plan_len: u8 = 0,
 };
 
-fn fillSuitedPure(g: *GroupPlans, counts: *const [9]u8, base: u8) bool {
-    const ps = suitedPurePlans(counts);
-    if (ps.len == 0) return false;
-    g.len = 0;
-    for (ps) |sp| {
-        if (g.len >= g.plans.len) break;
-        g.plans[g.len] = suitPlanToMelds(sp, base);
-        g.len += 1;
+/// 填入数牌组方案：`local_pair` 非空则该组含雀头（1..9 局部数字）。
+fn fillSuitedGroup(group: *Group, counts: *const [9]u8, base: u8, local_pair: ?u8) bool {
+    group.plan_len = 0;
+    if (local_pair) |lp| {
+        for (lookupSuitedWithPair(counts)) |entry| {
+            if (entry.pair_digit != lp + 1) continue;
+            if (group.plan_len >= group.plans.len) break;
+            group.plans[group.plan_len] = suitedEntryToPlan(entry.mentsu[0..entry.mentsu_len], base);
+            group.plan_len += 1;
+        }
+    } else {
+        const entries = lookupSuitedPure(counts);
+        if (entries.len == 0) return false;
+        for (entries) |entry| {
+            if (group.plan_len >= group.plans.len) break;
+            group.plans[group.plan_len] = suitedEntryToPlan(entry.mentsu[0..entry.mentsu_len], base);
+            group.plan_len += 1;
+        }
     }
-    return g.len > 0;
+    return group.plan_len > 0;
 }
 
-fn fillSuitedPair(g: *GroupPlans, counts: *const [9]u8, local_pair: u8, base: u8) bool {
-    const want: u8 = local_pair + 1;
-    const ps = suitedPairPlans(counts);
-    g.len = 0;
-    for (ps) |sp| {
-        if (sp.pair_tile != want) continue;
-        if (g.len >= g.plans.len) break;
-        g.plans[g.len] = suitPlanHToMelds(sp, base);
-        g.len += 1;
-    }
-    return g.len > 0;
-}
+/// 填入字牌组方案：`pair_kind` 非空则该种为雀头（全局 27..33）。
+fn fillHonorGroup(group: *Group, counts: *const [7]u8, pair_kind: ?u8) bool {
+    group.plan_len = 0;
+    var mentsu: [MAX_MENTSU]Mentsu = undefined;
+    var mentsu_len: u8 = 0;
+    var found_pair = false;
 
-fn fillHonorPure(g: *GroupPlans, honors: *const [7]u8) bool {
-    const p = honorPurePlan(honors) orelse return false;
-    g.plans[0] = honorPlanToMelds(p);
-    g.len = 1;
+    for (counts.*, 0..) |c, i| {
+        const kind: u8 = @intCast(27 + i);
+        if (c == 0) continue;
+        if (pair_kind) |pk| {
+            if (c == 2) {
+                if (found_pair or kind != pk) return false;
+                found_pair = true;
+                continue;
+            }
+        }
+        if (c != 3) return false;
+        if (mentsu_len >= MAX_MENTSU) return false;
+        mentsu[mentsu_len] = .{ .kind = .kotzu, .tile = kind };
+        mentsu_len += 1;
+    }
+
+    if (pair_kind != null and !found_pair) return false;
+    group.plans[0] = .{ .mentsu = mentsu, .mentsu_len = mentsu_len };
+    group.plan_len = 1;
     return true;
 }
 
-fn fillHonorPair(g: *GroupPlans, honors: *const [7]u8, pair_kind: u8) bool {
-    const p = honorPairPlan(honors) orelse return false;
-    if (p.pair_tile != pair_kind - 26) return false;
-    g.plans[0] = honorPlanHToMelds(p);
-    g.len = 1;
-    return true;
-}
-
-fn suitPlanToMelds(sp: SuitPlan, base: u8) MeldBag {
-    var bag: MeldBag = .{};
-    var i: u8 = 0;
-    while (i < sp.len) : (i += 1) {
-        bag.melds[i] = .{
-            .kind = sp.melds[i].kind,
-            .tile = base + (sp.melds[i].start - 1),
-        };
+/// 表内数牌面子（局部数字）转为全局牌种面子方案。
+fn suitedEntryToPlan(mentsu: []const SuitMentsu, base: u8) GroupPlan {
+    var plan: GroupPlan = .{};
+    for (mentsu, 0..) |m, i| {
+        plan.mentsu[i] = .{ .kind = m.kind, .tile = base + (m.digit - 1) };
     }
-    bag.len = sp.len;
-    return bag;
+    plan.mentsu_len = @intCast(mentsu.len);
+    return plan;
 }
 
-fn suitPlanHToMelds(sp: SuitPlanH, base: u8) MeldBag {
-    var bag: MeldBag = .{};
-    var i: u8 = 0;
-    while (i < sp.len) : (i += 1) {
-        bag.melds[i] = .{
-            .kind = sp.melds[i].kind,
-            .tile = base + (sp.melds[i].start - 1),
-        };
-    }
-    bag.len = sp.len;
-    return bag;
-}
-
-fn honorPlanToMelds(sp: SuitPlan) MeldBag {
-    var bag: MeldBag = .{};
-    var i: u8 = 0;
-    while (i < sp.len) : (i += 1) {
-        bag.melds[i] = .{
-            .kind = .kotzu,
-            .tile = 26 + sp.melds[i].start,
-        };
-    }
-    bag.len = sp.len;
-    return bag;
-}
-
-fn honorPlanHToMelds(sp: SuitPlanH) MeldBag {
-    var bag: MeldBag = .{};
-    var i: u8 = 0;
-    while (i < sp.len) : (i += 1) {
-        bag.melds[i] = .{
-            .kind = .kotzu,
-            .tile = 26 + sp.melds[i].start,
-        };
-    }
-    bag.len = sp.len;
-    return bag;
-}
-
-fn product(pair: u8, groups: *const [4]*GroupPlans, need_mentsu: u8, out: []Decomp, start: usize) usize {
+/// 四组方案笛卡尔积；面子总数等于 `need_mentsu` 时写入一条 Shape。
+fn cartesianProduct(
+    pair_kind: u8,
+    groups: *const [4]Group,
+    need_mentsu: u8,
+    out: []Shape,
+    start: usize,
+) usize {
     var n = start;
-    var idx: [4]u8 = .{ 0, 0, 0, 0 };
+    var idx: [4]u8 = .{0} ** 4;
     while (true) {
         var total: u8 = 0;
-        var i: u8 = 0;
-        while (i < 4) : (i += 1) total += groups[i].plans[idx[i]].len;
+        for (groups, idx) |group, i| total += group.plans[i].mentsu_len;
+
         if (total == need_mentsu and n < out.len) {
-            var d: Decomp = .{ .pair = pair };
+            var shape: Shape = .{ .pair_kind = pair_kind };
             var m: u8 = 0;
-            i = 0;
-            while (i < 4) : (i += 1) {
-                const gp = groups[i].plans[idx[i]];
+            for (groups, idx) |group, i| {
+                const plan = group.plans[i];
                 var j: u8 = 0;
-                while (j < gp.len) : (j += 1) {
-                    d.melds[m] = gp.melds[j];
+                while (j < plan.mentsu_len) : (j += 1) {
+                    shape.mentsu[m] = plan.mentsu[j];
                     m += 1;
                 }
             }
-            d.len = m;
-            out[n] = d;
+            shape.mentsu_len = m;
+            out[n] = shape;
             n += 1;
         }
 
@@ -229,298 +448,281 @@ fn product(pair: u8, groups: *const [4]*GroupPlans, need_mentsu: u8, out: []Deco
         while (g > 0) {
             g -= 1;
             idx[g] += 1;
-            if (idx[g] < groups[g].len) break;
+            if (idx[g] < groups[g].plan_len) break;
             idx[g] = 0;
             if (g == 0) return n;
         }
     }
 }
 
-fn sum34(counts: *const [34]u8) u8 {
-    var s: u8 = 0;
-    for (counts.*) |c| s += c;
-    return s;
-}
-
 // ---------------------------------------------------------------------------
-// 内部：单花色 / 字牌方案
+// 数牌查表（单花色 9 位计数 → 纯面子 / 含雀头方案）
 // ---------------------------------------------------------------------------
 
-const SuitMeld = struct {
-    kind: MeldKind,
-    /// 数牌 1..9；字牌 1..7。
-    start: u8,
+/// 表内面子：数字 1..9。
+const SuitMentsu = struct {
+    kind: MentsuKind,
+    digit: u8,
 };
 
-const SuitPlan = struct {
-    melds: [MAX_MELDS]SuitMeld = undefined,
-    len: u8 = 0,
+/// 表项：纯面子分解。
+const SuitPureEntry = struct {
+    mentsu: [MAX_MENTSU]SuitMentsu = undefined,
+    mentsu_len: u8 = 0,
 };
 
-const SuitPlanH = struct {
-    melds: [MAX_MELDS]SuitMeld = undefined,
-    len: u8 = 0,
-    pair_tile: u8 = 0,
+/// 表项：含雀头分解。
+const SuitPairEntry = struct {
+    mentsu: [MAX_MENTSU]SuitMentsu = undefined,
+    mentsu_len: u8 = 0,
+    /// 雀头数字 1..9。
+    pair_digit: u8 = 0,
 };
 
-const empty_pure: [0]SuitPlan = .{};
-const empty_pair: [0]SuitPlanH = .{};
+const empty_pure: [0]SuitPureEntry = .{};
+const empty_pair: [0]SuitPairEntry = .{};
 
-var g_pure: std.AutoHashMap(u32, []const SuitPlan) = undefined;
-var g_pair: std.AutoHashMap(u32, []const SuitPlanH) = undefined;
-var g_ready: bool = false;
+var table_pure: std.AutoHashMap(u32, []const SuitPureEntry) = undefined;
+var table_pair: std.AutoHashMap(u32, []const SuitPairEntry) = undefined;
+var table_ready: bool = false;
 
-const MAX_TILES: u8 = 14;
-
-fn suitedPurePlans(counts: *const [9]u8) []const SuitPlan {
-    ensureReady();
-    if (sum9(counts) > MAX_TILES) return &empty_pure;
-    return g_pure.get(encode(counts)) orelse &empty_pure;
+/// 查纯面子表；无法完全拆解则空切片。
+fn lookupSuitedPure(counts: *const [9]u8) []const SuitPureEntry {
+    ensureSuitTable();
+    if (sumDigits(counts) > 14) return &empty_pure;
+    return table_pure.get(encodeSuit(counts)) orelse &empty_pure;
 }
 
-fn suitedPairPlans(counts: *const [9]u8) []const SuitPlanH {
-    ensureReady();
-    if (sum9(counts) > MAX_TILES) return &empty_pair;
-    return g_pair.get(encode(counts)) orelse &empty_pair;
+/// 查含雀头表；无法完全拆解则空切片。
+fn lookupSuitedWithPair(counts: *const [9]u8) []const SuitPairEntry {
+    ensureSuitTable();
+    if (sumDigits(counts) > 14) return &empty_pair;
+    return table_pair.get(encodeSuit(counts)) orelse &empty_pair;
 }
 
-fn honorPurePlan(honors: *const [7]u8) ?SuitPlan {
-    var plan: SuitPlan = .{};
-    for (honors.*, 0..) |c, i| {
-        if (c == 0) continue;
-        if (c != 3) return null;
-        if (plan.len >= MAX_MELDS) return null;
-        plan.melds[plan.len] = .{ .kind = .kotzu, .start = @intCast(i + 1) };
-        plan.len += 1;
-    }
-    return plan;
-}
-
-fn honorPairPlan(honors: *const [7]u8) ?SuitPlanH {
-    var plan: SuitPlanH = .{};
-    var pair: ?u8 = null;
-    for (honors.*, 0..) |c, i| {
-        if (c == 2) {
-            if (pair != null) return null;
-            pair = @intCast(i + 1);
-        } else if (c == 3) {
-            if (plan.len >= MAX_MELDS) return null;
-            plan.melds[plan.len] = .{ .kind = .kotzu, .start = @intCast(i + 1) };
-            plan.len += 1;
-        } else if (c != 0) {
-            return null;
-        }
-    }
-    plan.pair_tile = pair orelse return null;
-    return plan;
-}
-
-fn encode(counts: *const [9]u8) u32 {
+/// 数牌状态编码：`Σ counts[i] · 5^i`。
+fn encodeSuit(counts: *const [9]u8) u32 {
     var idx: u32 = 0;
-    var base: u32 = 1;
+    var place: u32 = 1;
     for (counts.*) |c| {
-        std.debug.assert(c <= 4);
-        idx += @as(u32, c) * base;
-        base *= 5;
+        idx += c * place;
+        place *= 5;
     }
     return idx;
 }
 
-fn decode(idx: u32, out: *[9]u8) void {
-    var x = idx;
-    for (out) |*c| {
-        c.* = @intCast(x % 5);
-        x /= 5;
-    }
-}
-
-fn sum9(counts: *const [9]u8) u8 {
+/// 单花色总张数。
+fn sumDigits(counts: *const [9]u8) u8 {
     var s: u8 = 0;
     for (counts.*) |c| s += c;
     return s;
 }
 
-fn ensureReady() void {
-    if (g_ready) return;
-    buildTables(std.heap.page_allocator) catch @panic("decomp table build failed");
-    g_ready = true;
+/// 懒建数牌分解表。
+fn ensureSuitTable() void {
+    if (table_ready) return;
+    buildSuitTable(std.heap.page_allocator) catch @panic("decomp suit table");
+    table_ready = true;
 }
 
-fn prepend(plan: SuitPlan, meld: SuitMeld) SuitPlan {
-    std.debug.assert(plan.len < MAX_MELDS);
-    var out: SuitPlan = .{ .len = plan.len + 1 };
-    out.melds[0] = meld;
-    @memcpy(out.melds[1..][0..plan.len], plan.melds[0..plan.len]);
-    return out;
-}
-
-fn buildTables(gpa: std.mem.Allocator) !void {
-    g_pure = .init(gpa);
-    g_pair = .init(gpa);
-
-    const zero_plan = try gpa.dupe(SuitPlan, &[_]SuitPlan{.{}});
-    try g_pure.put(0, zero_plan);
+/// 按总张数 0..14 递推填充纯面子表与含雀头表。
+fn buildSuitTable(gpa: std.mem.Allocator) !void {
+    table_pure = .init(gpa);
+    table_pair = .init(gpa);
+    try table_pure.put(0, try gpa.dupe(SuitPureEntry, &[_]SuitPureEntry{.{} }));
 
     var n: u8 = 1;
-    while (n <= MAX_TILES) : (n += 1) {
+    while (n <= 14) : (n += 1) {
         var counts: [9]u8 = .{0} ** 9;
-        try recState(0, n, &counts, gpa);
+        try forEachSuitState(0, n, &counts, gpa);
     }
 }
 
-fn recState(pos: usize, remaining: u8, counts: *[9]u8, gpa: std.mem.Allocator) !void {
+/// 递归枚举总张数恰为 `remaining` 的数牌状态。
+fn forEachSuitState(pos: usize, remaining: u8, counts: *[9]u8, gpa: std.mem.Allocator) !void {
     if (pos == 9) {
-        if (remaining == 0) try processState(gpa, counts);
+        if (remaining == 0) try computeSuitState(counts, gpa);
         return;
     }
-    const max_c: u8 = @min(4, remaining);
     var c: u8 = 0;
-    while (c <= max_c) : (c += 1) {
+    while (c <= @min(4, remaining)) : (c += 1) {
         counts[pos] = c;
-        try recState(pos + 1, remaining - c, counts, gpa);
+        try forEachSuitState(pos + 1, remaining - c, counts, gpa);
     }
     counts[pos] = 0;
 }
 
-fn processState(gpa: std.mem.Allocator, counts: *const [9]u8) !void {
-    const idx = encode(counts);
-
+/// 对单个数牌状态：由最小非零位做刻/顺转移写纯表，再枚举雀头写含雀头表。
+fn computeSuitState(counts: *const [9]u8, gpa: std.mem.Allocator) !void {
+    const idx = encodeSuit(counts);
     var p: usize = 0;
     while (p < 9 and counts[p] == 0) : (p += 1) {}
     std.debug.assert(p < 9);
 
-    var plans: std.ArrayList(SuitPlan) = .empty;
-    defer plans.deinit(gpa);
+    var pure: std.ArrayList(SuitPureEntry) = .empty;
+    defer pure.deinit(gpa);
 
     if (counts[p] >= 3) {
         var child = counts.*;
         child[p] -= 3;
-        const child_plans = g_pure.get(encode(&child)) orelse &empty_pure;
-        for (child_plans) |cp| {
-            try plans.append(gpa, prepend(cp, .{ .kind = .kotzu, .start = @intCast(p + 1) }));
+        for (table_pure.get(encodeSuit(&child)) orelse &empty_pure) |child_plan| {
+            try pure.append(gpa, prependSuitMentsu(child_plan, .{ .kind = .kotzu, .digit = @intCast(p + 1) }));
         }
     }
-
-    if (p <= 6 and counts[p] >= 1 and counts[p + 1] >= 1 and counts[p + 2] >= 1) {
+    if (p <= 6 and counts[p] > 0 and counts[p + 1] > 0 and counts[p + 2] > 0) {
         var child = counts.*;
         child[p] -= 1;
         child[p + 1] -= 1;
         child[p + 2] -= 1;
-        const child_plans = g_pure.get(encode(&child)) orelse &empty_pure;
-        for (child_plans) |cp| {
-            try plans.append(gpa, prepend(cp, .{ .kind = .shuntsu, .start = @intCast(p + 1) }));
+        for (table_pure.get(encodeSuit(&child)) orelse &empty_pure) |child_plan| {
+            try pure.append(gpa, prependSuitMentsu(child_plan, .{ .kind = .shuntsu, .digit = @intCast(p + 1) }));
         }
     }
+    if (pure.items.len > 0) try table_pure.put(idx, try pure.toOwnedSlice(gpa));
 
-    if (plans.items.len > 0) {
-        const owned = try plans.toOwnedSlice(gpa);
-        try g_pure.put(idx, owned);
-    }
-
-    var plans_h: std.ArrayList(SuitPlanH) = .empty;
-    defer plans_h.deinit(gpa);
-
+    var with_pair: std.ArrayList(SuitPairEntry) = .empty;
+    defer with_pair.deinit(gpa);
     var i: usize = 0;
     while (i < 9) : (i += 1) {
         if (counts[i] < 2) continue;
         var child = counts.*;
         child[i] -= 2;
-        const child_plans = g_pure.get(encode(&child)) orelse &empty_pure;
-        for (child_plans) |cp| {
-            try plans_h.append(gpa, .{
-                .melds = cp.melds,
-                .len = cp.len,
-                .pair_tile = @intCast(i + 1),
+        for (table_pure.get(encodeSuit(&child)) orelse &empty_pure) |child_plan| {
+            try with_pair.append(gpa, .{
+                .mentsu = child_plan.mentsu,
+                .mentsu_len = child_plan.mentsu_len,
+                .pair_digit = @intCast(i + 1),
             });
         }
     }
+    if (with_pair.items.len > 0) try table_pair.put(idx, try with_pair.toOwnedSlice(gpa));
+}
 
-    if (plans_h.items.len > 0) {
-        const owned = try plans_h.toOwnedSlice(gpa);
-        try g_pair.put(idx, owned);
-    }
+/// 在子方案前插入一个面子。
+fn prependSuitMentsu(plan: SuitPureEntry, mentsu: SuitMentsu) SuitPureEntry {
+    var out: SuitPureEntry = .{ .mentsu_len = plan.mentsu_len + 1 };
+    out.mentsu[0] = mentsu;
+    @memcpy(out.mentsu[1..][0..plan.mentsu_len], plan.mentsu[0..plan.mentsu_len]);
+    return out;
 }
 
 // ---------------------------------------------------------------------------
 // tests
 // ---------------------------------------------------------------------------
 
-fn countsFromKinds(kinds: []const u8) [34]u8 {
-    var c: [34]u8 = .{0} ** 34;
-    for (kinds) |k| c[k] += 1;
-    return c;
-}
-
-test "encode decode roundtrip" {
-    const c = [_]u8{ 0, 0, 1, 1, 1, 0, 0, 0, 0 };
-    var out: [9]u8 = undefined;
-    decode(encode(&c), &out);
-    try std.testing.expectEqualSlices(u8, &c, &out);
-}
-
-test "decompose: 123m456m789m EEE SS" {
-    // 0,1,2 + 3,4,5 + 6,7,8 + 27,27,27 + 28,28
-    const kinds = [_]u8{ 0, 1, 2, 3, 4, 5, 6, 7, 8, 27, 27, 27, 28, 28 };
-    const c = countsFromKinds(&kinds);
-    var buf: [MAX_DECOMPS]Decomp = undefined;
-    const plans = decompose(&c, 4, &buf);
-    try std.testing.expect(plans.len >= 1);
-    try std.testing.expectEqual(@as(u8, 28), plans[0].pair);
-    try std.testing.expectEqual(@as(u8, 4), plans[0].len);
-}
-
-test "decompose: 11123m cannot (need pair+1shuntsu only covers 5 tiles)" {
-    const kinds = [_]u8{ 0, 0, 0, 1, 2 };
-    const c = countsFromKinds(&kinds);
-    var buf: [8]Decomp = undefined;
-    // 5 tiles → need_mentsu=1 → expect 5 ok
-    const plans = decompose(&c, 1, &buf);
-    try std.testing.expectEqual(@as(usize, 1), plans.len);
-    try std.testing.expectEqual(@as(u8, 0), plans[0].pair);
-    try std.testing.expectEqual(@as(u8, 1), plans[0].len);
-    try std.testing.expect(plans[0].melds[0].kind == .shuntsu);
-    try std.testing.expectEqual(@as(u8, 0), plans[0].melds[0].tile);
-}
-
-test "decompose: isolated tiles fail" {
-    const kinds = [_]u8{ 0, 3, 4 }; // 1m 4m 5m
-    const c = countsFromKinds(&kinds);
-    var buf: [4]Decomp = undefined;
-    try std.testing.expectEqual(@as(usize, 0), decompose(&c, 1, &buf).len);
-}
-
-test "decompose: 333444555m + 11p → multi plans" {
-    // man 333444555 (kinds 2,3,4 x3) + pin 11 (kind 9 x2)
-    var kinds_buf: [11]u8 = undefined;
-    var n: usize = 0;
-    for (0..3) |_| {
-        kinds_buf[n] = 2;
-        n += 1;
-        kinds_buf[n] = 3;
-        n += 1;
-        kinds_buf[n] = 4;
-        n += 1;
+test "agariDecomps: tsumo winning on pair or shuntsu" {
+    const seat_tiles = @import("../seat_tiles.zig");
+    var ky = Kyoku.init();
+    ky.phase = .wait_act;
+    ky.turn = 0;
+    ky.drawn = "1m";
+    for ([_]Pai{ "1m", "1m", "2m", "3m", "1m" }) |t| seat_tiles.addToHand(&ky, 0, t);
+    var i: u8 = 0;
+    while (i < 3) : (i += 1) {
+        var f: kyoku_mod.Fuuro = .{ .kind = .pon, .tile_len = 3, .from = 1 };
+        f.tiles = .{ "9s", "9s", "9s", "9s" };
+        seat_tiles.addFuuro(&ky, 0, f);
     }
-    kinds_buf[n] = 9;
-    n += 1;
-    kinds_buf[n] = 9;
-    n += 1;
-    const c = countsFromKinds(kinds_buf[0..n]);
-    var buf: [MAX_DECOMPS]Decomp = undefined;
-    const plans = decompose(&c, 3, &buf);
+
+    var buf: [8]AgariDecomp = undefined;
+    const plans = agariDecomps(&ky, 0, true, &buf);
+    try std.testing.expectEqual(@as(usize, 2), plans.len);
+
+    var saw_pair = false;
+    var saw_mentsu = false;
+    for (plans) |ad| {
+        try std.testing.expect(ad.blocks[0].is_pair);
+        var wins: u8 = 0;
+        for (ad.blocks) |b| {
+            if (b.winning) |w| {
+                wins += 1;
+                try std.testing.expect(types.paiEql(w, "1m"));
+                try std.testing.expect(b.winning_tsumo);
+                if (b.is_pair) saw_pair = true else saw_mentsu = true;
+            } else try std.testing.expect(!b.winning_tsumo);
+            if (b.is_fuuro) try std.testing.expect(b.winning == null);
+        }
+        try std.testing.expectEqual(@as(u8, 1), wins);
+    }
+    try std.testing.expect(saw_pair and saw_mentsu);
+}
+
+test "agariDecomps: ron winning on pair" {
+    const seat_tiles = @import("../seat_tiles.zig");
+    var ky = Kyoku.init();
+    ky.phase = .wait_response;
+    ky.last_discard = "S";
+    for ([_]Pai{ "1m", "2m", "3m", "4m", "5m", "6m", "7m", "8m", "9m", "E", "E", "E", "S" }) |t| {
+        seat_tiles.addToHand(&ky, 0, t);
+    }
+
+    var buf: [8]AgariDecomp = undefined;
+    const plans = agariDecomps(&ky, 0, false, &buf);
+    try std.testing.expectEqual(@as(usize, 1), plans.len);
+    try std.testing.expect(plans[0].blocks[0].is_pair);
+    try std.testing.expect(types.paiEql(plans[0].blocks[0].winning.?, "S"));
+    try std.testing.expect(!plans[0].blocks[0].winning_tsumo);
+}
+
+test "agariDecomps: multi structure 333444555m" {
+    const seat_tiles = @import("../seat_tiles.zig");
+    var ky = Kyoku.init();
+    ky.phase = .wait_act;
+    ky.turn = 0;
+    ky.drawn = "5m";
+    for ([_]Pai{ "3m", "3m", "3m", "4m", "4m", "4m", "5m", "5m", "1p", "1p", "5m" }) |t| {
+        seat_tiles.addToHand(&ky, 0, t);
+    }
+    var f: kyoku_mod.Fuuro = .{ .kind = .pon, .tile_len = 3, .from = 1 };
+    f.tiles = .{ "9s", "9s", "9s", "9s" };
+    seat_tiles.addFuuro(&ky, 0, f);
+
+    var buf: [16]AgariDecomp = undefined;
+    const plans = agariDecomps(&ky, 0, true, &buf);
     try std.testing.expect(plans.len >= 2);
-    try std.testing.expectEqual(@as(u8, 9), plans[0].pair);
-    for (plans) |hp| {
-        try std.testing.expectEqual(@as(u8, 3), hp.len);
-    }
 }
 
-test "honor-only: EEE SSS WW" {
-    const kinds = [_]u8{ 27, 27, 27, 28, 28, 28, 29, 29 };
-    const c = countsFromKinds(&kinds);
-    var buf: [8]Decomp = undefined;
-    const plans = decompose(&c, 2, &buf);
-    try std.testing.expectEqual(@as(usize, 1), plans.len);
-    try std.testing.expectEqual(@as(u8, 29), plans[0].pair);
-    try std.testing.expectEqual(@as(u8, 2), plans[0].len);
+test "agariDecomps: ron 5mr on 5567m — red in pair vs shuntsu" {
+    const seat_tiles = @import("../seat_tiles.zig");
+    var ky = Kyoku.init();
+    ky.phase = .wait_response;
+    ky.last_discard = "5mr";
+    // 闭张 5567 + 5mr → 雀头55 + 顺567；进张赤5可落雀头或顺子
+    for ([_]Pai{ "5m", "5m", "6m", "7m" }) |t| seat_tiles.addToHand(&ky, 0, t);
+    var i: u8 = 0;
+    while (i < 3) : (i += 1) {
+        var f: kyoku_mod.Fuuro = .{ .kind = .pon, .tile_len = 3, .from = 1 };
+        f.tiles = .{ "9s", "9s", "9s", "9s" };
+        seat_tiles.addFuuro(&ky, 0, f);
+    }
+
+    var buf: [8]AgariDecomp = undefined;
+    const plans = agariDecomps(&ky, 0, false, &buf);
+    try std.testing.expectEqual(@as(usize, 2), plans.len);
+
+    var red_in_pair = false;
+    var red_in_shuntsu = false;
+    for (plans) |ad| {
+        var win_on_pair = false;
+        for (ad.blocks) |b| {
+            if (b.winning) |w| {
+                try std.testing.expect(types.paiEql(w, "5mr"));
+                try std.testing.expect(!b.winning_tsumo);
+                try std.testing.expect(types.paiEql(b.tiles[0], "5mr"));
+                win_on_pair = b.is_pair;
+            }
+        }
+        if (win_on_pair) {
+            red_in_pair = true;
+            try std.testing.expect(!pai_util.isRed(ad.blocks[1].tiles[0]));
+            try std.testing.expect(!pai_util.isRed(ad.blocks[1].tiles[1]));
+            try std.testing.expect(!pai_util.isRed(ad.blocks[1].tiles[2]));
+        } else {
+            red_in_shuntsu = true;
+            try std.testing.expect(ad.blocks[0].winning == null);
+            try std.testing.expect(!pai_util.isRed(ad.blocks[0].tiles[0]));
+            try std.testing.expect(!pai_util.isRed(ad.blocks[0].tiles[1]));
+        }
+    }
+    try std.testing.expect(red_in_pair and red_in_shuntsu);
 }
