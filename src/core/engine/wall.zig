@@ -1,3 +1,11 @@
+//! 牌山：洗牌仍为扁平 `tiles[136]`（种子可复现）；读写按下述真实垛序。
+//!
+//! # 布局（常量切：61 活垛 + 7 死垛）
+//! - 每垛 2 张，数组下标 `2*s` = 底，`2*s+1` = 顶
+//! - 活山垛 `0..60`：摸牌顺序为每垛先顶后底（第 n 张下标 `n ^ 1`）
+//! - 死山垛 `61..67`（局部 `0..6`）：局部 0 侧岭上，局部 2..6 为表宝顶 / 里宝底
+//!
+//! 发牌、活山摸、岭上、翻表宝均走同一套下标函数，便于渲染与复现对齐。
 const std = @import("std");
 const types = @import("../types.zig");
 const kyoku_mod = @import("../kyoku.zig");
@@ -7,6 +15,50 @@ const Pai = types.Pai;
 const WALL_LEN = kyoku_mod.WALL_LEN;
 const LIVE_WALL_LEN = kyoku_mod.LIVE_WALL_LEN;
 const DORA_MARKER_CAP = kyoku_mod.DORA_MARKER_CAP;
+
+/// 死山起始全局垛号（之前为活山）。
+pub const DEAD_STACK0: u8 = @intCast(LIVE_WALL_LEN / 2);
+/// 第一张表宝在死山局部垛号（从岭上侧数第 3 垛）。
+const DORA_STACK_LOCAL0: u8 = 2;
+
+/// 活山第 `n` 张（先顶后底）在 `tiles` 中的下标。
+pub fn liveTileIndex(n: u8) u8 {
+    std.debug.assert(n < LIVE_WALL_LEN);
+    return n ^ 1;
+}
+
+/// 第 `i` 张表宝指示（顶）下标。
+pub fn doraTopIndex(i: u8) u8 {
+    std.debug.assert(i < DORA_MARKER_CAP);
+    const stack: u8 = DEAD_STACK0 + DORA_STACK_LOCAL0 + i;
+    return stack * 2 + 1;
+}
+
+/// 第 `i` 张里宝指示（同垛底）下标。
+pub fn uraBottomIndex(i: u8) u8 {
+    std.debug.assert(i < DORA_MARKER_CAP);
+    const stack: u8 = DEAD_STACK0 + DORA_STACK_LOCAL0 + i;
+    return stack * 2;
+}
+
+/// 第 `n` 张岭上牌下标（死山岭上侧先顶后底，最多 4）。
+pub fn rinshanTileIndex(n: u8) u8 {
+    std.debug.assert(n < 4);
+    const local_stack = n / 2;
+    const top_first = n % 2 == 0;
+    const stack: u8 = DEAD_STACK0 + local_stack;
+    return if (top_first) stack * 2 + 1 else stack * 2;
+}
+
+/// 写入当前已翻表宝对应的里宝指示（同垛底）。
+pub fn fillUraMarkers(ky: *const Kyoku, buf: *[DORA_MARKER_CAP]Pai) []const Pai {
+    const n = ky.yama.dora_markers_len;
+    var i: u8 = 0;
+    while (i < n) : (i += 1) {
+        buf[i] = ky.yama.tiles[uraBottomIndex(i)];
+    }
+    return buf[0..n];
+}
 
 /// 按标准牌组填满 136 张牌山（含赤宝与字牌）。
 fn fill(yama: *Yama) void {
@@ -104,50 +156,69 @@ pub fn prepare(ky: *Kyoku) void {
 pub fn drawLive(ky: *Kyoku) ?Pai {
     const y = &ky.yama;
     if (y.live_i >= y.live_end) return null;
-    const pai = y.tiles[y.live_i];
+    const pai = y.tiles[liveTileIndex(y.live_i)];
     y.live_i += 1;
     return pai;
 }
 
-/// 翻开下一张宝牌指示牌；已满则 null。下标走开局死山起点，不跟 live_end。
+/// 翻开下一张宝牌指示牌；已满则 null。
 pub fn revealDora(ky: *Kyoku) ?Pai {
     const y = &ky.yama;
     if (y.dora_markers_len >= DORA_MARKER_CAP) return null;
-    if (y.dora_i > y.rinshan_i) return null;
-    const pai = y.tiles[y.dora_i];
+    // 岭上占用死山局部 0..1（4 张）；表宝从局部 2 起，互不重叠
+    const pai = y.tiles[doraTopIndex(y.dora_markers_len)];
     y.dora_markers[y.dora_markers_len] = pai;
     y.dora_markers_len += 1;
-    y.dora_i += 1;
     return pai;
 }
 
-/// 岭上：取 rinshan_i，再 live_end--（海底并入死山）。
+/// 岭上：按死山岭上侧垛序取牌，再 `live_end--`（海底并入死山）。
 pub fn drawRinshan(ky: *Kyoku) ?Pai {
     const y = &ky.yama;
     if (y.live_end <= y.live_i) return null;
-    // 最多 4 次岭上（开局死山 14，指示+岭上共用）
-    const drawn: u8 = @intCast((WALL_LEN - 1) - @as(usize, y.rinshan_i));
-    if (drawn >= 4) return null;
-    if (y.rinshan_i < y.dora_i) return null;
+    if (y.rinshan_count >= 4) return null;
 
-    const pai = y.tiles[y.rinshan_i];
-    y.rinshan_i -= 1;
+    const pai = y.tiles[rinshanTileIndex(y.rinshan_count)];
+    y.rinshan_count += 1;
     y.live_end -= 1;
     return pai;
 }
 
-test "rinshan shrinks live_end; dora_i stays on opening dead start" {
+test "layout: live top-then-bottom" {
+    try std.testing.expectEqual(@as(u8, 1), liveTileIndex(0));
+    try std.testing.expectEqual(@as(u8, 0), liveTileIndex(1));
+    try std.testing.expectEqual(@as(u8, 3), liveTileIndex(2));
+    try std.testing.expectEqual(@as(u8, 2), liveTileIndex(3));
+}
+
+test "layout: dora top / ura bottom same stack" {
+    try std.testing.expectEqual(@as(u8, 127), doraTopIndex(0));
+    try std.testing.expectEqual(@as(u8, 126), uraBottomIndex(0));
+    try std.testing.expectEqual(@as(u8, 129), doraTopIndex(1));
+    try std.testing.expectEqual(@as(u8, 128), uraBottomIndex(1));
+}
+
+test "layout: rinshan from dead near side" {
+    try std.testing.expectEqual(@as(u8, 123), rinshanTileIndex(0));
+    try std.testing.expectEqual(@as(u8, 122), rinshanTileIndex(1));
+    try std.testing.expectEqual(@as(u8, 125), rinshanTileIndex(2));
+    try std.testing.expectEqual(@as(u8, 124), rinshanTileIndex(3));
+}
+
+test "rinshan shrinks live_end; dora markers independent" {
     var ky = Kyoku.init();
     prepare(&ky);
     try std.testing.expect(ky.yama.live_end == LIVE_WALL_LEN);
-    try std.testing.expect(ky.yama.dora_i == LIVE_WALL_LEN);
+    try std.testing.expect(ky.yama.dora_markers_len == 0);
+    try std.testing.expect(ky.yama.rinshan_count == 0);
 
     _ = revealDora(&ky) orelse unreachable;
-    try std.testing.expect(ky.yama.dora_i == LIVE_WALL_LEN + 1);
+    try std.testing.expect(ky.yama.dora_markers_len == 1);
 
     const before_live_end = ky.yama.live_end;
-    const before_dora_i = ky.yama.dora_i;
+    const before_dora_n = ky.yama.dora_markers_len;
     _ = drawRinshan(&ky) orelse unreachable;
     try std.testing.expect(ky.yama.live_end == before_live_end - 1);
-    try std.testing.expect(ky.yama.dora_i == before_dora_i);
+    try std.testing.expect(ky.yama.dora_markers_len == before_dora_n);
+    try std.testing.expect(ky.yama.rinshan_count == 1);
 }

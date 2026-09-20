@@ -29,7 +29,7 @@ fn legalWaitAct(ky: *const Kyoku, seat: Seat, out: []Action) []Action {
     }
 
     // 自摸和
-    if (ky.drawn != null and referee.shape.canAgari(ky.handSlice(seat), p.fuuro_len)) {
+    if (ky.drawn != null and referee.canAgari(ky, seat, true)) {
         if (n < out.len) {
             out[n] = .{ .hora = .{ .target = seat, .pai = ky.drawn } };
             n += 1;
@@ -40,7 +40,7 @@ fn legalWaitAct(ky: *const Kyoku, seat: Seat, out: []Action) []Action {
     if (ky.is_first_turn and p.river_len == 0 and p.fuuro_len == 0 and ky.drawn != null) {
         // 起手+摸：14 张里看 13 张闭张的幺九种（不含摸？规则是配牌 13 张）
         const closed13 = if (p.tehai_len > 0) p.tehai[0 .. p.tehai_len - 1] else p.tehai[0..0];
-        if (referee.shape.kyushuKinds(closed13) >= 9) {
+        if (referee.kyushuKinds(closed13) >= 9) {
             if (n < out.len) {
                 out[n] = .ryukyoku;
                 n += 1;
@@ -48,8 +48,8 @@ fn legalWaitAct(ky: *const Kyoku, seat: Seat, out: []Action) []Action {
         }
     }
 
-    // 立直
-    if (!p.riichi and ky.pending_riichi == null and p.fuuro_len == 0 and ky.scores[seat] >= 1000 and ky.drawn != null) {
+    // 立直（暗杠仍门前）
+    if (!p.riichi and ky.pending_riichi == null and p.isMenzen() and ky.scores[seat] >= 1000 and ky.drawn != null) {
         if (n < out.len) {
             out[n] = .reach;
             n += 1;
@@ -133,8 +133,8 @@ fn appendKanActions(ky: *const Kyoku, seat: Seat, out: []Action, start: usize) u
 
 fn legalWaitResponse(ky: *const Kyoku, seat: Seat, out: []Action) []Action {
     if (!ky.response_open[seat] or ky.response_done[seat]) return out[0..0];
-    const pai = ky.last_discard orelse return out[0..0];
-    const discarder = ky.last_discarder;
+    const pai = ky.response_pai orelse return out[0..0];
+    const discarder = ky.response_from;
     if (seat == discarder) return out[0..0];
 
     var n: usize = 0;
@@ -146,8 +146,11 @@ fn legalWaitResponse(ky: *const Kyoku, seat: Seat, out: []Action) []Action {
 
     // 抢杠 / 荣和
     if (ky.pending_kan != null) {
-        // 仅荣（抢杠）
-        if (canRon(ky, seat, pai)) {
+        const ok = if (ky.pending_ankan)
+            canKokushiChankan(ky, seat, pai)
+        else
+            canRon(ky, seat, pai);
+        if (ok) {
             if (n < out.len) {
                 out[n] = .{ .hora = .{ .target = discarder, .pai = pai } };
                 n += 1;
@@ -173,11 +176,16 @@ fn legalWaitResponse(ky: *const Kyoku, seat: Seat, out: []Action) []Action {
 }
 
 fn canRon(ky: *const Kyoku, seat: Seat, pai: Pai) bool {
-    const p = &ky.players[seat];
-    if (p.riichi) {
-        // 立直后可荣
-    }
-    return referee.shape.canWinWith(ky.handSlice(seat), pai, p.fuuro_len);
+    const discard = ky.response_pai orelse return false;
+    if (!types.paiEql(discard, pai)) return false;
+    return referee.canAgari(ky, seat, false);
+}
+
+/// 国士抢暗杠：进张为 `response_pai`，仅国士形且非振听。
+pub fn canKokushiChankan(ky: *const Kyoku, seat: Seat, pai: Pai) bool {
+    const target = ky.response_pai orelse return false;
+    if (!types.paiEql(target, pai)) return false;
+    return referee.canKokushiRon(ky, seat);
 }
 
 fn appendPonKan(ky: *const Kyoku, seat: Seat, pai: Pai, out: []Action, start: usize) usize {

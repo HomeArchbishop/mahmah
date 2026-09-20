@@ -17,6 +17,7 @@ const CAPACITY = types.CAPACITY;
 pub fn resolveDiscard(ky: *Kyoku, seat: Seat, pai: Pai, tsumogiri: bool, out: []Event) ApplyError![]Event {
     if (!seat_tiles.removeFromHand(ky, seat, pai, tsumogiri)) return error.IllegalAction;
     seat_tiles.addToRiver(ky, seat, pai);
+    seat_tiles.addToSutehai(ky, seat, pai);
     ky.drawn = null;
     ky.turn = seat; // unnecessary, but just keep it as an anchor
 
@@ -56,7 +57,7 @@ pub fn resolveDiscard(ky: *Kyoku, seat: Seat, pai: Pai, tsumogiri: bool, out: []
 pub fn applyReach(ky: *Kyoku, seat: Seat, out: []Event) ApplyError![]Event {
     if (ky.pending_riichi != null) return error.IllegalAction;
     if (ky.players[seat].riichi) return error.IllegalAction;
-    if (ky.players[seat].fuuro_len != 0) return error.IllegalAction;
+    if (!ky.players[seat].isMenzen()) return error.IllegalAction;
     if (ky.scores[seat] < 1000) return error.IllegalAction;
     if (ky.drawn == null) return error.IllegalAction;
     ky.pending_riichi = seat;
@@ -79,8 +80,11 @@ pub fn afterNoClaim(ky: *Kyoku, out: []Event, start: usize) []Event {
 fn acceptRiichi(ky: *Kyoku, out: []Event, start: usize) usize {
     const seat = ky.pending_riichi orelse return start;
     ky.pending_riichi = null;
-    ky.players[seat].riichi = true;
-    ky.players[seat].ippatsu = true;
+    const p = &ky.players[seat];
+    // 河仅宣言打（无人曾鸣）→ 双立直
+    p.double_riichi = p.river_len == 1 and ky.claims_this_kyoku == 0;
+    p.riichi = true;
+    p.ippatsu = true;
     ky.scores[seat] -= 1000;
     ky.kyotaku += 1;
     var n = start;
@@ -103,7 +107,7 @@ fn checkTochuRyukyoku(ky: *const Kyoku) bool {
 
 fn fourWinds(ky: *const Kyoku) bool {
     const d0 = ky.first_discards[0] orelse return false;
-    if (!@import("pai.zig").isWind(d0)) return false;
+    if (!@import("pai.zig").isKazehai(d0)) return false;
     var s: u8 = 1;
     while (s < CAPACITY) : (s += 1) {
         const d = ky.first_discards[s] orelse return false;

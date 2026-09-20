@@ -8,6 +8,7 @@ const Kyoku = kyoku_mod.Kyoku;
 const Event = types.Event;
 const Seat = types.Seat;
 const ApplyError = types.ApplyError;
+const CAPACITY = types.CAPACITY;
 
 /// 自摸和。
 pub fn applyTsumo(ky: *Kyoku, seat: Seat, out: []Event) ApplyError![]Event {
@@ -16,8 +17,8 @@ pub fn applyTsumo(ky: *Kyoku, seat: Seat, out: []Event) ApplyError![]Event {
     out[n] = .{ .hora = .{ .actor = seat, .target = seat, .pai = pai } };
     n += 1;
 
-    const winners = [_]Seat{seat};
-    referee.score.applyHoraScores(&ky.scores, &winners, seat, ky.oya, ky.honba, ky.kyotaku, true);
+    const value = referee.evaluateHora(ky, seat, true);
+    applyScoreDeltas(ky, referee.horaDeltas(seat, seat, ky.oya, value, ky.honba, ky.kyotaku, true));
     ky.kyotaku = 0;
 
     const renchan = seat == ky.oya;
@@ -29,8 +30,8 @@ pub fn applyTsumo(ky: *Kyoku, seat: Seat, out: []Event) ApplyError![]Event {
 
 /// 荣和（可多家）；调用前应手窗仍有效，本函数负责清窗。
 pub fn applyRon(ky: *Kyoku, winners: []const Seat, out: []Event) ApplyError![]Event {
-    const pai = ky.last_discard orelse return error.IllegalAction;
-    const from = ky.last_discarder;
+    const pai = ky.response_pai orelse return error.IllegalAction;
+    const from = ky.response_from;
 
     var n: usize = 0;
     for (winners) |w| {
@@ -38,7 +39,12 @@ pub fn applyRon(ky: *Kyoku, winners: []const Seat, out: []Event) ApplyError![]Ev
         n += 1;
     }
 
-    referee.score.applyHoraScores(&ky.scores, winners, from, ky.oya, ky.honba, ky.kyotaku, false);
+    // 各家按自身最高点计；供托只给第一家
+    for (winners, 0..) |w, i| {
+        const value = referee.evaluateHora(ky, w, false);
+        const sticks: u8 = if (i == 0) ky.kyotaku else 0;
+        applyScoreDeltas(ky, referee.horaDeltas(w, from, ky.oya, value, ky.honba, sticks, false));
+    }
     ky.kyotaku = 0;
 
     var dealer_win = false;
@@ -53,10 +59,18 @@ pub fn applyRon(ky: *Kyoku, winners: []const Seat, out: []Event) ApplyError![]Ev
 
     window.clear(ky);
     ky.pending_kan = null;
+    ky.pending_ankan = false;
     ky.pending_riichi = null;
     ky.pending_minkan_dora = 0;
-    ky.last_discard = null;
+    ky.response_pai = null;
     ky.drawn = null;
 
     return round.afterKyokuEndRenchan(ky, out, n, dealer_win);
+}
+
+fn applyScoreDeltas(ky: *Kyoku, deltas: [CAPACITY]i32) void {
+    var i: u8 = 0;
+    while (i < CAPACITY) : (i += 1) {
+        ky.scores[i] += deltas[i];
+    }
 }

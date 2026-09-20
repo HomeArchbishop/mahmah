@@ -23,9 +23,10 @@ pub fn anyOpen(ky: *const Kyoku) bool {
 /// 开打牌应手窗。
 pub fn openDiscardResponse(ky: *Kyoku, discarder: Seat, pai: Pai) void {
     ky.phase = .wait_response;
-    ky.last_discard = pai;
-    ky.last_discarder = discarder;
+    ky.response_pai = pai;
+    ky.response_from = discarder;
     ky.pending_kan = null;
+    ky.pending_ankan = false;
     clear(ky);
     var s: u8 = 0;
     while (s < CAPACITY) : (s += 1) {
@@ -35,18 +36,22 @@ pub fn openDiscardResponse(ky: *Kyoku, discarder: Seat, pai: Pai) void {
     }
 }
 
-/// 开抢杠窗（仅荣）。
-pub fn openChankan(ky: *Kyoku, kan_actor: Seat, pai: Pai) void {
+/// 开抢杠窗（仅荣）。`ankan=true` 时仅国士可抢暗杠。
+pub fn openChankan(ky: *Kyoku, kan_actor: Seat, pai: Pai, ankan: bool) void {
     ky.phase = .wait_response;
-    ky.last_discard = pai;
-    ky.last_discarder = kan_actor;
+    ky.response_pai = pai;
+    ky.response_from = kan_actor;
     ky.pending_kan = kan_actor;
+    ky.pending_ankan = ankan;
     clear(ky);
     var s: u8 = 0;
     while (s < CAPACITY) : (s += 1) {
         if (s == kan_actor) continue;
-        if (legal.seatHasClaim(ky, @intCast(s), kan_actor, pai, true)) {
-            ky.response_open[s] = true;
-        }
+        const seat: Seat = @intCast(s);
+        const can = if (ankan)
+            legal.canKokushiChankan(ky, seat, pai)
+        else
+            legal.seatHasClaim(ky, seat, kan_actor, pai, true);
+        if (can) ky.response_open[s] = true;
     }
 }

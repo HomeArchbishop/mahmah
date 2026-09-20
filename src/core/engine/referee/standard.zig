@@ -1,13 +1,17 @@
-//! 标准型和了拆解。
+//! 标准型拆解（4 面子 + 雀头；不含七对/国士、不含役/振听）。
 //!
 //! # 术语
-//! - **进张** `winning`：自摸为 `drawn`，荣和为 `last_discard`
+//! - **进张** `winning`：自摸为 `drawn`，荣和为 `response_pai`
 //! - **闭张** `closed`：不含副露的手牌（荣和时含进张）
 //! - **结构** `Shape`：雀头 + 若干闭张面子（尚无进张归属、无副露）
-//! - **块** `Block`：雀头 / 闭张面子 / 副露之一
-//! - **拆解** `AgariDecomp`：恰 5 块（雀头 → 闭张面子 → 副露）
+//! - **块** `Block`：`kind`（雀头/顺/刻/杠）+ 是否鸣牌副露 + 进张标记
+//! - **拆解** `StandardDecomp`：恰 5 块（雀头 → 闭张面子 → 副露/暗杠）
 //!
-//! # 流程 `agariDecomps`
+//! # 公开入口
+//! - `standardDecomps`：枚举标准型拆解（含进张归属）
+//! - `hasStandardShape`：指定进张是否成标准型（仅形，供听牌扫描）
+//!
+//! # 流程 `standardDecomps`
 //! 1. 取进张；组闭张；`need_mentsu = 4 - fuuro_len`
 //! 2. 枚举闭张结构
 //! 3. 进张落入哪个闭张块 → 各物化成一条拆解
@@ -27,11 +31,26 @@ const MAX_MENTSU: u8 = 4;
 /// 单次结构枚举上限。
 const MAX_SHAPES: usize = 64;
 
-/// 一块：雀头、闭张面子或副露。
+/// 一块的面子种类。
+pub const BlockKind = enum {
+    /// 雀头
+    jantou,
+    /// 顺子
+    shuntsu,
+    /// 刻子
+    kotsu,
+    /// 杠子（含暗杠）
+    kantsu,
+};
+
+/// 一块：雀头 / 顺刻杠。
+///
+/// `is_fuuro`：仅吃碰大明杠/加杠为 true；暗杠与手内面子为 false。
+/// 荣和进张所在块仍为闭张（`is_fuuro=false`），用 `winning` / `winning_tsumo` 区分暗刻。
 pub const Block = struct {
     tiles: [4]Pai = undefined,
     tile_len: u8 = 0,
-    is_pair: bool = false,
+    kind: BlockKind = .jantou,
     is_fuuro: bool = false,
     /// 进张落入本块时为该牌，否则 null。
     winning: ?Pai = null,
@@ -40,16 +59,41 @@ pub const Block = struct {
 };
 
 /// 一条完整拆解（恰 `BLOCKS` 块）。
-pub const AgariDecomp = struct {
+pub const StandardDecomp = struct {
     /// 顺序：雀头、闭张面子…、副露…
     blocks: [BLOCKS]Block = [_]Block{.{}} ** BLOCKS,
 };
 
-/// 枚举座位标准和了的全部拆解（含进张归属）。七对/国士返回空。
-pub fn agariDecomps(ky: *const Kyoku, seat: Seat, tsumo: bool, out: []AgariDecomp) []AgariDecomp {
+/// 枚举座位标准型的全部拆解（含进张归属）。七对/国士返回空。
+pub fn standardDecomps(ky: *const Kyoku, seat: Seat, tsumo: bool, out: []StandardDecomp) []StandardDecomp {
     if (out.len == 0) return out[0..0];
 
-    const winning = (if (tsumo) ky.drawn else ky.last_discard) orelse return out[0..0];
+    const winning = (if (tsumo) ky.drawn else ky.response_pai) orelse return out[0..0];
+    return standardDecompsWith(ky, seat, winning, tsumo, out);
+}
+
+/// 指定进张时闭张是否成标准型（仅形，不含役/振听）。
+pub fn hasStandardShape(ky: *const Kyoku, seat: Seat, winning: Pai) bool {
+    const winning_kind = pai_util.kindId(winning) orelse return false;
+    const player = &ky.players[seat];
+    if (player.fuuro_len > MAX_MENTSU) return false;
+    const need_mentsu: u8 = MAX_MENTSU - player.fuuro_len;
+
+    const hand = ky.handSlice(seat);
+    const expect: usize = @as(usize, need_mentsu) * 3 + 2;
+    if (hand.len + 1 != expect) return false;
+
+    var counts: [34]u8 = .{0} ** 34;
+    for (hand) |tile| {
+        counts[pai_util.kindId(tile) orelse return false] += 1;
+    }
+    counts[winning_kind] += 1;
+
+    var shapes_buf: [MAX_SHAPES]Shape = undefined;
+    return enumerateShapes(&counts, need_mentsu, &shapes_buf).len > 0;
+}
+
+fn standardDecompsWith(ky: *const Kyoku, seat: Seat, winning: Pai, tsumo: bool, out: []StandardDecomp) []StandardDecomp {
     const winning_kind = pai_util.kindId(winning) orelse return out[0..0];
 
     const player = &ky.players[seat];
@@ -105,7 +149,7 @@ fn collectClosed(
 }
 
 // ---------------------------------------------------------------------------
-// 物化：结构 + 进张归属 → AgariDecomp
+// 物化：结构 + 进张归属 → StandardDecomp
 // ---------------------------------------------------------------------------
 
 /// 将一种结构写成 5 块，并把进张标在 `winning_block`（0=雀头，其余为闭张面子下标+1）。
@@ -116,16 +160,16 @@ fn materialize(
     winning: Pai,
     tsumo: bool,
     winning_block: u8,
-) AgariDecomp {
+) StandardDecomp {
     var used: [14]bool = .{false} ** 14;
-    var result: AgariDecomp = .{};
+    var result: StandardDecomp = .{};
     var bi: u8 = 0;
 
     result.blocks[bi] = fillClosedBlock(
         &used,
         closed,
         pairKindList(shape.pair_kind),
-        true,
+        .jantou,
         winning,
         tsumo,
         winning_block == 0,
@@ -134,11 +178,15 @@ fn materialize(
 
     var mi: u8 = 0;
     while (mi < shape.mentsu_len) : (mi += 1) {
+        const mk: BlockKind = switch (shape.mentsu[mi].kind) {
+            .kotzu => .kotsu,
+            .shuntsu => .shuntsu,
+        };
         result.blocks[bi] = fillClosedBlock(
             &used,
             closed,
             mentsuKindList(shape.mentsu[mi]),
-            false,
+            mk,
             winning,
             tsumo,
             winning_block == 1 + mi,
@@ -149,8 +197,19 @@ fn materialize(
     var fi: u8 = 0;
     while (fi < player.fuuro_len) : (fi += 1) {
         const f = player.fuuro[fi];
-        result.blocks[bi] = .{ .is_fuuro = true, .tile_len = f.tile_len };
+        const bk: BlockKind = switch (f.kind) {
+            .chi => .shuntsu,
+            .pon => .kotsu,
+            .daiminkan, .ankan, .kakan => .kantsu,
+        };
+        // 暗杠在 kyoku.fuuro 中，拆解上不算副露（门前暗杠）
+        result.blocks[bi] = .{
+            .kind = bk,
+            .is_fuuro = f.kind != .ankan,
+            .tile_len = f.tile_len,
+        };
         @memcpy(result.blocks[bi].tiles[0..f.tile_len], f.tiles[0..f.tile_len]);
+        sortBlockTiles(&result.blocks[bi]);
         bi += 1;
     }
 
@@ -178,13 +237,14 @@ fn mentsuKindList(m: Mentsu) KindList {
 }
 
 /// 从闭张池抽出一块的具体牌。
-/// 承担进张的块：进张牌面精确放入 `tiles[0]`（故进张为 `5mr` 时赤宝钉在该块）。
+/// 承担进张的块：进张牌面精确抽入（故进张为 `5mr` 时赤宝钉在该块），由 `winning` 标记。
 /// 其余张按牌种抽取，与 `pai.takeKinds` 一样优先非赤。
+/// 填完后按牌种升序排列（同种保持相对顺序）。
 fn fillClosedBlock(
     used: *[14]bool,
     closed: []const Pai,
     kind_list: KindList,
-    is_pair: bool,
+    kind: BlockKind,
     winning: Pai,
     tsumo: bool,
     takes_winning: bool,
@@ -192,7 +252,8 @@ fn fillClosedBlock(
     var kinds = kind_list.kinds;
     var klen = kind_list.len;
     var block: Block = .{
-        .is_pair = is_pair,
+        .kind = kind,
+        .is_fuuro = false,
         .winning = if (takes_winning) winning else null,
         .winning_tsumo = takes_winning and tsumo,
     };
@@ -212,7 +273,25 @@ fn fillClosedBlock(
         block.tiles[block.tile_len] = takeByKind(used, closed, kinds[i]) orelse "?";
         block.tile_len += 1;
     }
+    sortBlockTiles(&block);
     return block;
+}
+
+/// 块内牌按 `kindId` 升序（稳定：同种不交换）。
+fn sortBlockTiles(block: *Block) void {
+    var i: u8 = 1;
+    while (i < block.tile_len) : (i += 1) {
+        const t = block.tiles[i];
+        const tk = pai_util.kindId(t) orelse 255;
+        var j = i;
+        while (j > 0) {
+            const pk = pai_util.kindId(block.tiles[j - 1]) orelse 255;
+            if (pk <= tk) break;
+            block.tiles[j] = block.tiles[j - 1];
+            j -= 1;
+        }
+        block.tiles[j] = t;
+    }
 }
 
 /// 从 `kinds[0..len]` 去掉一个等于 `kind` 的项。
@@ -521,7 +600,7 @@ fn sumDigits(counts: *const [9]u8) u8 {
 /// 懒建数牌分解表。
 fn ensureSuitTable() void {
     if (table_ready) return;
-    buildSuitTable(std.heap.page_allocator) catch @panic("decomp suit table");
+    buildSuitTable(std.heap.page_allocator) catch @panic("standard suit table");
     table_ready = true;
 }
 
@@ -529,7 +608,7 @@ fn ensureSuitTable() void {
 fn buildSuitTable(gpa: std.mem.Allocator) !void {
     table_pure = .init(gpa);
     table_pair = .init(gpa);
-    try table_pure.put(0, try gpa.dupe(SuitPureEntry, &[_]SuitPureEntry{.{} }));
+    try table_pure.put(0, try gpa.dupe(SuitPureEntry, &[_]SuitPureEntry{.{}}));
 
     var n: u8 = 1;
     while (n <= 14) : (n += 1) {
@@ -610,7 +689,7 @@ fn prependSuitMentsu(plan: SuitPureEntry, mentsu: SuitMentsu) SuitPureEntry {
 // tests
 // ---------------------------------------------------------------------------
 
-test "agariDecomps: tsumo winning on pair or shuntsu" {
+test "standardDecomps: tsumo winning on pair or shuntsu" {
     const seat_tiles = @import("../seat_tiles.zig");
     var ky = Kyoku.init();
     ky.phase = .wait_act;
@@ -624,21 +703,21 @@ test "agariDecomps: tsumo winning on pair or shuntsu" {
         seat_tiles.addFuuro(&ky, 0, f);
     }
 
-    var buf: [8]AgariDecomp = undefined;
-    const plans = agariDecomps(&ky, 0, true, &buf);
-    try std.testing.expectEqual(@as(usize, 2), plans.len);
+    var buf: [8]StandardDecomp = undefined;
+    const decomps = standardDecomps(&ky, 0, true, &buf);
+    try std.testing.expectEqual(@as(usize, 2), decomps.len);
 
     var saw_pair = false;
     var saw_mentsu = false;
-    for (plans) |ad| {
-        try std.testing.expect(ad.blocks[0].is_pair);
+    for (decomps) |decomp| {
+        try std.testing.expect(decomp.blocks[0].kind == .jantou);
         var wins: u8 = 0;
-        for (ad.blocks) |b| {
+        for (decomp.blocks) |b| {
             if (b.winning) |w| {
                 wins += 1;
                 try std.testing.expect(types.paiEql(w, "1m"));
                 try std.testing.expect(b.winning_tsumo);
-                if (b.is_pair) saw_pair = true else saw_mentsu = true;
+                if (b.kind == .jantou) saw_pair = true else saw_mentsu = true;
             } else try std.testing.expect(!b.winning_tsumo);
             if (b.is_fuuro) try std.testing.expect(b.winning == null);
         }
@@ -647,24 +726,24 @@ test "agariDecomps: tsumo winning on pair or shuntsu" {
     try std.testing.expect(saw_pair and saw_mentsu);
 }
 
-test "agariDecomps: ron winning on pair" {
+test "standardDecomps: ron winning on pair" {
     const seat_tiles = @import("../seat_tiles.zig");
     var ky = Kyoku.init();
     ky.phase = .wait_response;
-    ky.last_discard = "S";
+    ky.response_pai = "S";
     for ([_]Pai{ "1m", "2m", "3m", "4m", "5m", "6m", "7m", "8m", "9m", "E", "E", "E", "S" }) |t| {
         seat_tiles.addToHand(&ky, 0, t);
     }
 
-    var buf: [8]AgariDecomp = undefined;
-    const plans = agariDecomps(&ky, 0, false, &buf);
-    try std.testing.expectEqual(@as(usize, 1), plans.len);
-    try std.testing.expect(plans[0].blocks[0].is_pair);
-    try std.testing.expect(types.paiEql(plans[0].blocks[0].winning.?, "S"));
-    try std.testing.expect(!plans[0].blocks[0].winning_tsumo);
+    var buf: [8]StandardDecomp = undefined;
+    const decomps = standardDecomps(&ky, 0, false, &buf);
+    try std.testing.expectEqual(@as(usize, 1), decomps.len);
+    try std.testing.expect(decomps[0].blocks[0].kind == .jantou);
+    try std.testing.expect(types.paiEql(decomps[0].blocks[0].winning.?, "S"));
+    try std.testing.expect(!decomps[0].blocks[0].winning_tsumo);
 }
 
-test "agariDecomps: multi structure 333444555m" {
+test "standardDecomps: multi structure 333444555m" {
     const seat_tiles = @import("../seat_tiles.zig");
     var ky = Kyoku.init();
     ky.phase = .wait_act;
@@ -677,16 +756,16 @@ test "agariDecomps: multi structure 333444555m" {
     f.tiles = .{ "9s", "9s", "9s", "9s" };
     seat_tiles.addFuuro(&ky, 0, f);
 
-    var buf: [16]AgariDecomp = undefined;
-    const plans = agariDecomps(&ky, 0, true, &buf);
-    try std.testing.expect(plans.len >= 2);
+    var buf: [16]StandardDecomp = undefined;
+    const decomps = standardDecomps(&ky, 0, true, &buf);
+    try std.testing.expect(decomps.len >= 2);
 }
 
-test "agariDecomps: ron 5mr on 5567m — red in pair vs shuntsu" {
+test "standardDecomps: ron 5mr on 5567m — red in pair vs shuntsu" {
     const seat_tiles = @import("../seat_tiles.zig");
     var ky = Kyoku.init();
     ky.phase = .wait_response;
-    ky.last_discard = "5mr";
+    ky.response_pai = "5mr";
     // 闭张 5567 + 5mr → 雀头55 + 顺567；进张赤5可落雀头或顺子
     for ([_]Pai{ "5m", "5m", "6m", "7m" }) |t| seat_tiles.addToHand(&ky, 0, t);
     var i: u8 = 0;
@@ -696,32 +775,36 @@ test "agariDecomps: ron 5mr on 5567m — red in pair vs shuntsu" {
         seat_tiles.addFuuro(&ky, 0, f);
     }
 
-    var buf: [8]AgariDecomp = undefined;
-    const plans = agariDecomps(&ky, 0, false, &buf);
-    try std.testing.expectEqual(@as(usize, 2), plans.len);
+    var buf: [8]StandardDecomp = undefined;
+    const decomps = standardDecomps(&ky, 0, false, &buf);
+    try std.testing.expectEqual(@as(usize, 2), decomps.len);
 
     var red_in_pair = false;
     var red_in_shuntsu = false;
-    for (plans) |ad| {
+    for (decomps) |decomp| {
         var win_on_pair = false;
-        for (ad.blocks) |b| {
+        for (decomp.blocks) |b| {
             if (b.winning) |w| {
                 try std.testing.expect(types.paiEql(w, "5mr"));
                 try std.testing.expect(!b.winning_tsumo);
-                try std.testing.expect(types.paiEql(b.tiles[0], "5mr"));
-                win_on_pair = b.is_pair;
+                var has_red = false;
+                for (0..b.tile_len) |ti| {
+                    if (types.paiEql(b.tiles[ti], "5mr")) has_red = true;
+                }
+                try std.testing.expect(has_red);
+                win_on_pair = b.kind == .jantou;
             }
         }
         if (win_on_pair) {
             red_in_pair = true;
-            try std.testing.expect(!pai_util.isRed(ad.blocks[1].tiles[0]));
-            try std.testing.expect(!pai_util.isRed(ad.blocks[1].tiles[1]));
-            try std.testing.expect(!pai_util.isRed(ad.blocks[1].tiles[2]));
+            try std.testing.expect(!pai_util.isRed(decomp.blocks[1].tiles[0]));
+            try std.testing.expect(!pai_util.isRed(decomp.blocks[1].tiles[1]));
+            try std.testing.expect(!pai_util.isRed(decomp.blocks[1].tiles[2]));
         } else {
             red_in_shuntsu = true;
-            try std.testing.expect(ad.blocks[0].winning == null);
-            try std.testing.expect(!pai_util.isRed(ad.blocks[0].tiles[0]));
-            try std.testing.expect(!pai_util.isRed(ad.blocks[0].tiles[1]));
+            try std.testing.expect(decomp.blocks[0].winning == null);
+            try std.testing.expect(!pai_util.isRed(decomp.blocks[0].tiles[0]));
+            try std.testing.expect(!pai_util.isRed(decomp.blocks[0].tiles[1]));
         }
     }
     try std.testing.expect(red_in_pair and red_in_shuntsu);

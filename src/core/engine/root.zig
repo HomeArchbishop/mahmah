@@ -63,15 +63,16 @@ pub fn chombo(ky: *Kyoku, offender: Seat, reason: []const u8, out: []Event) []Ev
     std.debug.assert(out.len >= 4);
     ky.drawn = null;
     ky.pending_kan = null;
+    ky.pending_ankan = false;
     ky.pending_riichi = null;
     ky.pending_minkan_dora = 0;
-    ky.last_discard = null;
+    ky.response_pai = null;
     window.clear(ky);
 
     var n: usize = 0;
     out[n] = .{ .ryukyoku = .{
         .reason = reason,
-        .deltas = referee.score.chomboDeltas(offender, ky.oya),
+        .deltas = referee.chomboDeltas(offender, ky.oya),
     } };
     n += 1;
     return round.afterKyokuEnd(ky, out, n);

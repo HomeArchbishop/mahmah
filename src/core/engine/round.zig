@@ -50,39 +50,46 @@ fn resetPlayers(ky: *Kyoku) void {
     for (&ky.players) |*p| {
         p.tehai_len = 0;
         p.river_len = 0;
+        p.sutehai_len = 0;
         p.fuuro_len = 0;
         p.riichi = false;
         p.ippatsu = false;
+        p.double_riichi = false;
+        p.doujun_furiten = false;
     }
     ky.drawn = null;
 }
 
 fn deal(ky: *Kyoku) void {
-    var pos: u8 = 0;
+    var n: u8 = 0;
     var r: u8 = 0;
     while (r < 13) : (r += 1) {
         var seat: u8 = 0;
         while (seat < CAPACITY) : (seat += 1) {
-            seat_tiles.addToHand(ky, @intCast(seat), ky.yama.tiles[pos]);
-            pos += 1;
+            seat_tiles.addToHand(ky, @intCast(seat), ky.yama.tiles[wall.liveTileIndex(n)]);
+            n += 1;
         }
     }
-    ky.yama.live_i = pos;
+    ky.yama.live_i = n;
 }
 
 fn clearRoundFlags(ky: *Kyoku) void {
     ky.pending_kan = null;
+    ky.pending_ankan = false;
     ky.pending_riichi = null;
     ky.pending_minkan_dora = 0;
     ky.claims_this_kyoku = 0;
     ky.kan_count = 0;
     ky.first_discards = .{ null, null, null, null };
-    ky.last_discard = null;
+    ky.response_pai = null;
     window.clear(ky);
     for (&ky.players) |*p| {
         p.ippatsu = false;
         p.riichi = false;
+        p.double_riichi = false;
         p.fuuro_len = 0;
+        p.sutehai_len = 0;
+        p.doujun_furiten = false;
     }
 }
 

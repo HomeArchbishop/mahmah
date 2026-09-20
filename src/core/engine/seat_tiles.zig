@@ -8,12 +8,13 @@ const Seat = types.Seat;
 const Pai = types.Pai;
 const HAND_CAP = kyoku_mod.HAND_CAP;
 
-/// 手牌末尾加入一张。
+/// 手牌末尾加入一张（发牌/摸牌）；摸入时清除同巡振听。
 pub fn addToHand(ky: *Kyoku, seat: Seat, pai: Pai) void {
     const p = &ky.players[seat];
     std.debug.assert(p.tehai_len < HAND_CAP);
     p.tehai[p.tehai_len] = pai;
     p.tehai_len += 1;
+    clearDoujunFuriten(ky, seat);
 }
 
 /// 河牌末尾加入一张。
@@ -22,6 +23,18 @@ pub fn addToRiver(ky: *Kyoku, seat: Seat, pai: Pai) void {
     std.debug.assert(p.river_len < p.river.len);
     p.river[p.river_len] = pai;
     p.river_len += 1;
+}
+
+/// 舍张日志末尾加入一张（鸣走不删）。
+pub fn addToSutehai(ky: *Kyoku, seat: Seat, pai: Pai) void {
+    const p = &ky.players[seat];
+    std.debug.assert(p.sutehai_len < p.sutehai.len);
+    p.sutehai[p.sutehai_len] = pai;
+    p.sutehai_len += 1;
+}
+
+pub fn clearDoujunFuriten(ky: *Kyoku, seat: Seat) void {
+    ky.players[seat].doujun_furiten = false;
 }
 
 /// 从河末移除（被鸣走）。
