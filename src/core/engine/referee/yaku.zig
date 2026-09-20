@@ -270,15 +270,7 @@ fn sanankoo(ky: *const Kyoku, seat: Seat, tsumo: bool, decomp: Decomp) ?YakuCoun
     _ = ky;
     _ = seat;
     _ = tsumo;
-    var n: u8 = 0;
-    for (decomp.blocks) |b| {
-        if (b.kind != .kotsu and b.kind != .kantsu) continue;
-        if (b.is_fuuro) continue;
-        // 荣和完成的刻不算暗刻；自摸完成的算
-        if (b.winning != null and !b.winning_tsumo) continue;
-        n += 1;
-    }
-    if (n == 3) return .{ .han = 2 };
+    if (ankouCount(decomp) == 3) return .{ .han = 2 };
     return null;
 }
 
@@ -424,15 +416,10 @@ fn suuankoo(ky: *const Kyoku, seat: Seat, tsumo: bool, decomp: Decomp) ?YakuCoun
     _ = ky;
     _ = seat;
     _ = tsumo;
-    var n: u8 = 0;
-    for (decomp.blocks) |b| {
-        if (b.kind != .kotsu and b.kind != .kantsu) continue;
-        if (b.is_fuuro) continue;
-        if (b.winning != null and !b.winning_tsumo) continue;
-        n += 1;
-    }
-    if (n == 4) return .{ .yakuman = 1 };
-    return null;
+    if (ankouCount(decomp) != 4) return null;
+    // 单骑由 suuankootanki 计双倍
+    if (decomp.blocks[0].winning != null) return null;
+    return .{ .yakuman = 1 };
 }
 
 fn tsuuiisoo(ky: *const Kyoku, seat: Seat, tsumo: bool, decomp: Decomp) ?YakuCount {
@@ -477,6 +464,84 @@ fn shousuushii(ky: *const Kyoku, seat: Seat, tsumo: bool, decomp: Decomp) ?YakuC
     return null;
 }
 
+fn chinroutou(ky: *const Kyoku, seat: Seat, tsumo: bool, decomp: Decomp) ?YakuCount {
+    _ = ky;
+    _ = seat;
+    _ = tsumo;
+    for (decomp.blocks) |b| {
+        if (b.kind == .shuntsu) return null;
+        for (0..b.tile_len) |i| {
+            if (!pai_util.isRoutouhai(b.tiles[i])) return null;
+        }
+    }
+    return .{ .yakuman = 1 };
+}
+
+fn chuurenpoutou(ky: *const Kyoku, seat: Seat, tsumo: bool, decomp: Decomp) ?YakuCount {
+    _ = tsumo;
+    if (!ky.players[seat].isMenzen()) return null;
+    // 纯正由 junseichuurenpoutou 计双倍
+    if (chuurenKind(decomp) != false) return null;
+    return .{ .yakuman = 1 };
+}
+
+fn suukantsu(ky: *const Kyoku, seat: Seat, tsumo: bool, decomp: Decomp) ?YakuCount {
+    _ = ky;
+    _ = seat;
+    _ = tsumo;
+    var n: u8 = 0;
+    for (decomp.blocks) |b| {
+        if (b.kind == .kantsu) n += 1;
+    }
+    if (n == 4) return .{ .yakuman = 1 };
+    return null;
+}
+
+fn tenhou(ky: *const Kyoku, seat: Seat, tsumo: bool, decomp: Decomp) ?YakuCount {
+    _ = decomp;
+    if (!(tsumo and seat == ky.oya and ky.is_first_turn)) return null;
+    const p = &ky.players[seat];
+    if (p.river_len != 0 or p.fuuro_len != 0) return null;
+    return .{ .yakuman = 1 };
+}
+
+fn chiihou(ky: *const Kyoku, seat: Seat, tsumo: bool, decomp: Decomp) ?YakuCount {
+    _ = decomp;
+    if (!(tsumo and seat != ky.oya and ky.is_first_turn)) return null;
+    const p = &ky.players[seat];
+    if (p.river_len != 0 or p.fuuro_len != 0) return null;
+    return .{ .yakuman = 1 };
+}
+
+fn daisuushii(ky: *const Kyoku, seat: Seat, tsumo: bool, decomp: Decomp) ?YakuCount {
+    _ = ky;
+    _ = seat;
+    _ = tsumo;
+    var kaze_kotsu: u8 = 0;
+    for (decomp.blocks) |b| {
+        if (b.kind != .kotsu and b.kind != .kantsu) continue;
+        if (pai_util.isKazehai(b.tiles[0])) kaze_kotsu += 1;
+    }
+    if (kaze_kotsu == 4) return .{ .yakuman = 2 };
+    return null;
+}
+
+fn junseichuurenpoutou(ky: *const Kyoku, seat: Seat, tsumo: bool, decomp: Decomp) ?YakuCount {
+    _ = tsumo;
+    if (!ky.players[seat].isMenzen()) return null;
+    if (chuurenKind(decomp) != true) return null;
+    return .{ .yakuman = 2 };
+}
+
+fn suuankootanki(ky: *const Kyoku, seat: Seat, tsumo: bool, decomp: Decomp) ?YakuCount {
+    _ = ky;
+    _ = seat;
+    _ = tsumo;
+    if (ankouCount(decomp) != 4) return null;
+    if (decomp.blocks[0].winning == null) return null;
+    return .{ .yakuman = 2 };
+}
+
 // ---------------------------------------------------------------------------
 // 工具
 // ---------------------------------------------------------------------------
@@ -487,6 +552,57 @@ fn isGreen(pai: types.Pai) bool {
     if ((pai_util.suit(pai) orelse return false) != 's') return false;
     const r = pai_util.rank(pai) orelse return false;
     return r == 2 or r == 3 or r == 4 or r == 6 or r == 8;
+}
+
+/// 暗刻/暗杠数（荣和完成的刻不计）。
+fn ankouCount(decomp: Decomp) u8 {
+    var n: u8 = 0;
+    for (decomp.blocks) |b| {
+        if (b.kind != .kotsu and b.kind != .kantsu) continue;
+        if (b.is_fuuro) continue;
+        if (b.winning != null and !b.winning_tsumo) continue;
+        n += 1;
+    }
+    return n;
+}
+
+/// 九莲：`null` 非九莲；`false` 普通；`true` 纯正（听牌形恰为 1112345678999）。
+fn chuurenKind(decomp: Decomp) ?bool {
+    var counts: [9]u8 = .{0} ** 9;
+    var suit_seen: ?u8 = null;
+    var winning_rank: ?u8 = null;
+    for (decomp.blocks) |b| {
+        for (0..b.tile_len) |i| {
+            const t = b.tiles[i];
+            const si = pai_util.suitId(t) orelse return null;
+            const r = pai_util.rank(t) orelse return null;
+            if (suit_seen) |s| {
+                if (s != si) return null;
+            } else suit_seen = si;
+            counts[r - 1] += 1;
+        }
+        if (b.winning) |w| {
+            winning_rank = pai_util.rank(w);
+        }
+    }
+    const base = [_]u8{ 3, 1, 1, 1, 1, 1, 1, 1, 3 };
+    var extras: u8 = 0;
+    for (counts, 0..) |c, i| {
+        if (c == base[i]) continue;
+        if (c == base[i] + 1) {
+            extras += 1;
+            continue;
+        }
+        return null;
+    }
+    if (extras != 1) return null;
+    const wr = winning_rank orelse return false;
+    if (wr < 1 or wr > 9) return false;
+    counts[wr - 1] -= 1;
+    for (counts, 0..) |c, i| {
+        if (c != base[i]) return false;
+    }
+    return true;
 }
 
 fn shuntsuPairCount(decomp: Decomp) u8 {
