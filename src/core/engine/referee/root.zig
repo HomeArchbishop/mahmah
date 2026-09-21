@@ -1,6 +1,7 @@
-//! 裁判公开门面：编排振听 → 牌形 → 役/符 → 得点。
+//! 裁判公开门面：振听 → 牌形 → 役/符 → 得点（仅结算相关判定）。
 //!
 //! 子模块一词一事；外部只应 `@import` 本文件。
+//! 着法可否（立直/杠/九种等）由 engine 自行判定，不经本模块。
 const types = @import("../../types.zig");
 const kyoku_mod = @import("../../kyoku.zig");
 const special = @import("special.zig");
@@ -15,7 +16,6 @@ const pai_util = @import("../pai.zig");
 const Seat = types.Seat;
 const Kyoku = kyoku_mod.Kyoku;
 
-pub const kyushuKinds = special.kyushuKinds;
 pub const chomboDeltas = points.chomboDeltas;
 pub const horaDeltas = points.horaDeltas;
 pub const notenDeltas = points.notenDeltas;

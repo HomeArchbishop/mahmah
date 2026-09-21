@@ -36,11 +36,11 @@ fn legalWaitAct(ky: *const Kyoku, seat: Seat, out: []Action) []Action {
         }
     }
 
-    // 九种九牌
+    // 九种九牌（过程规则：首巡未切、无副露）
     if (ky.is_first_turn and p.river_len == 0 and p.fuuro_len == 0 and ky.drawn != null) {
-        // 起手+摸：14 张里看 13 张闭张的幺九种（不含摸？规则是配牌 13 张）
+        // 配牌 13 张（不含当前摸牌）
         const closed13 = if (p.tehai_len > 0) p.tehai[0 .. p.tehai_len - 1] else p.tehai[0..0];
-        if (referee.kyushuKinds(closed13) >= 9) {
+        if (kyushuKinds(closed13) >= 9) {
             if (n < out.len) {
                 out[n] = .ryukyoku;
                 n += 1;
@@ -329,4 +329,18 @@ pub fn seatsNeeding(ky: *const Kyoku, out: []Seat) []Seat {
         },
         .idle => return out[0..0],
     }
+}
+
+/// 手牌中不同幺九种类数（九种九牌合法性用）。
+fn kyushuKinds(hand: []const Pai) u8 {
+    var seen: [34]bool = .{false} ** 34;
+    var n: u8 = 0;
+    for (hand) |p| {
+        if (!pai_util.isYaochuuhai(p)) continue;
+        const id = pai_util.kindId(p) orelse continue;
+        if (seen[id]) continue;
+        seen[id] = true;
+        n += 1;
+    }
+    return n;
 }
