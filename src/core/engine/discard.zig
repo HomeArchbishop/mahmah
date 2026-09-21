@@ -6,6 +6,7 @@ const round = @import("round.zig");
 const legal = @import("legal.zig");
 const window = @import("response_window.zig");
 const kan = @import("kan.zig");
+const ryuukyoku = @import("ryuukyoku.zig");
 const Kyoku = kyoku_mod.Kyoku;
 const Event = types.Event;
 const Seat = types.Seat;
@@ -146,10 +147,7 @@ fn dealNext(ky: *Kyoku, out: []Event, start: usize) []Event {
     var n = start;
     const next = round.nextSeat(ky.turn);
     const drawn = wall.drawLive(ky) orelse {
-        out[n] = .{ .ryukyoku = .{ .reason = "howanpai", .deltas = .{ 0, 0, 0, 0 } } };
-        n += 1;
-        ky.honba += 1;
-        return round.afterKyokuEnd(ky, out, n);
+        return ryuukyoku.applyHowanpai(ky, out, n);
     };
 
     ky.turn = next;

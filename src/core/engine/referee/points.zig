@@ -12,6 +12,25 @@ pub const HoraValue = struct {
     yakuman: u8 = 0,
 };
 
+/// 听牌罚符：不听者合计支付 3000，由听牌者均分。0/4 家听则全 0。
+pub fn notenDeltas(tenpai: [CAPACITY]bool) [CAPACITY]i32 {
+    var n_ten: u8 = 0;
+    for (tenpai) |t| {
+        if (t) n_ten += 1;
+    }
+    if (n_ten == 0 or n_ten == 4) return .{ 0, 0, 0, 0 };
+
+    const n_noten: u8 = @as(u8, CAPACITY) - n_ten;
+    const pay: i32 = @divExact(3000, @as(i32, n_noten));
+    const recv: i32 = @divExact(3000, @as(i32, n_ten));
+    var d: [CAPACITY]i32 = .{ 0, 0, 0, 0 };
+    var i: u8 = 0;
+    while (i < CAPACITY) : (i += 1) {
+        d[i] = if (tenpai[i]) recv else -pay;
+    }
+    return d;
+}
+
 /// 役满罚符点数差：亲家犯规 -12000/+4000×3；子家 -8000，亲家 +4000，另两家 +2000。
 pub fn chomboDeltas(offender: Seat, oya: Seat) [CAPACITY]i32 {
     var d: [CAPACITY]i32 = .{ 0, 0, 0, 0 };
@@ -140,4 +159,20 @@ test "horaDeltas yakuman child ron" {
     const d = horaDeltas(1, 0, 0, v, 0, 0, false);
     try std.testing.expectEqual(@as(i32, -32000), d[0]);
     try std.testing.expectEqual(@as(i32, 32000), d[1]);
+}
+
+test "notenDeltas 1 tenpai" {
+    const d = notenDeltas(.{ true, false, false, false });
+    try std.testing.expectEqual(@as(i32, 3000), d[0]);
+    try std.testing.expectEqual(@as(i32, -1000), d[1]);
+    try std.testing.expectEqual(@as(i32, -1000), d[2]);
+    try std.testing.expectEqual(@as(i32, -1000), d[3]);
+}
+
+test "notenDeltas 2 tenpai" {
+    const d = notenDeltas(.{ true, true, false, false });
+    try std.testing.expectEqual(@as(i32, 1500), d[0]);
+    try std.testing.expectEqual(@as(i32, 1500), d[1]);
+    try std.testing.expectEqual(@as(i32, -1500), d[2]);
+    try std.testing.expectEqual(@as(i32, -1500), d[3]);
 }

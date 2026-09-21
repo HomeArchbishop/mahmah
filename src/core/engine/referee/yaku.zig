@@ -5,6 +5,7 @@ const kyoku_mod = @import("../../kyoku.zig");
 const standard = @import("standard.zig");
 const pai_util = @import("../pai.zig");
 const wall = @import("../wall.zig");
+const closed_mod = @import("closed.zig");
 
 const Seat = types.Seat;
 const Kyoku = kyoku_mod.Kyoku;
@@ -102,7 +103,7 @@ fn yakuStandard(ky: *const Kyoku, seat: Seat, tsumo: bool, decomp: Decomp) YakuC
 fn yakuChiitoi(ky: *const Kyoku, seat: Seat, tsumo: bool) YakuCount {
     const empty: Decomp = .{};
     var closed_buf: [14]types.Pai = undefined;
-    const closed = collectClosed(ky, seat, tsumo, &closed_buf) orelse return .{};
+    const closed = closed_mod.collectClosedFromKy(ky, seat, tsumo, &closed_buf) orelse return .{};
 
     if (tenhou(ky, seat, tsumo, empty)) |y| return y;
     if (chiihou(ky, seat, tsumo, empty)) |y| return y;
@@ -169,7 +170,7 @@ fn isKokushiJuusanmen(ky: *const Kyoku, seat: Seat, tsumo: bool) bool {
     const winning = (if (tsumo) ky.drawn else ky.response_pai) orelse return false;
     const wk = pai_util.kindId(winning) orelse return false;
     var closed_buf: [14]types.Pai = undefined;
-    const closed = collectClosed(ky, seat, tsumo, &closed_buf) orelse return false;
+    const closed = closed_mod.collectClosedFromKy(ky, seat, tsumo, &closed_buf) orelse return false;
 
     var counts: [34]u8 = .{0} ** 34;
     for (closed) |p| {
@@ -794,19 +795,6 @@ fn fillDoraMask(markers: []const types.Pai, is_dora: *[34]bool) void {
         const k = pai_util.doraKindFromIndicator(m) orelse continue;
         is_dora[k] = true;
     }
-}
-
-fn collectClosed(ky: *const Kyoku, seat: Seat, tsumo: bool, buf: *[14]types.Pai) ?[]const types.Pai {
-    const winning = (if (tsumo) ky.drawn else ky.response_pai) orelse return null;
-    const hand = ky.handSlice(seat);
-    if (tsumo) {
-        if (hand.len > 14) return null;
-        return hand;
-    }
-    if (hand.len >= 14) return null;
-    @memcpy(buf[0..hand.len], hand);
-    buf[hand.len] = winning;
-    return buf[0 .. hand.len + 1];
 }
 
 fn doraHanTiles(tiles: []const types.Pai, markers: []const types.Pai) ?YakuCount {

@@ -4,7 +4,7 @@ const discard = @import("discard.zig");
 const response = @import("response.zig");
 const hora = @import("hora.zig");
 const kan = @import("kan.zig");
-const round = @import("round.zig");
+const ryuukyoku = @import("ryuukyoku.zig");
 const Kyoku = kyoku_mod.Kyoku;
 const Action = types.Action;
 const Event = types.Event;
@@ -19,7 +19,7 @@ pub fn applyWaitAct(ky: *Kyoku, seat: Seat, action: Action, out: []Event) ApplyE
         .dahai => |d| discard.resolveDiscard(ky, seat, d.pai, d.tsumogiri, out),
         .reach => discard.applyReach(ky, seat, out),
         .hora => hora.applyTsumo(ky, seat, out),
-        .ryukyoku => round.applyKyushu(ky, out),
+        .ryukyoku => ryuukyoku.applyKyushu(ky, out),
         .ankan => |a| kan.applyAnkan(ky, seat, a.consumed, out),
         .kakan => |a| kan.applyKakan(ky, seat, a.pai, a.consumed, out),
         else => error.IllegalAction,

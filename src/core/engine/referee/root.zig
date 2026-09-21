@@ -6,9 +6,11 @@ const kyoku_mod = @import("../../kyoku.zig");
 const special = @import("special.zig");
 const standard = @import("standard.zig");
 const furiten = @import("furiten.zig");
+const waits = @import("waits.zig");
 const yaku = @import("yaku.zig");
 const fu = @import("fu.zig");
 const points = @import("points.zig");
+const pai_util = @import("../pai.zig");
 
 const Seat = types.Seat;
 const Kyoku = kyoku_mod.Kyoku;
@@ -16,7 +18,21 @@ const Kyoku = kyoku_mod.Kyoku;
 pub const kyushuKinds = special.kyushuKinds;
 pub const chomboDeltas = points.chomboDeltas;
 pub const horaDeltas = points.horaDeltas;
+pub const notenDeltas = points.notenDeltas;
 pub const HoraValue = points.HoraValue;
+pub const isTenpai = waits.isTenpai;
+
+/// 流局满贯形：河牌全幺九，且舍张从未被鸣（`sutehai_len == river_len`）。
+pub fn isNagashi(ky: *const Kyoku, seat: Seat) bool {
+    const p = &ky.players[seat];
+    if (p.river_len == 0) return false;
+    if (p.sutehai_len != p.river_len) return false;
+    var i: u8 = 0;
+    while (i < p.river_len) : (i += 1) {
+        if (!pai_util.isYaochuuhai(p.river[i])) return false;
+    }
+    return true;
+}
 
 /// 座位当前能否和了。`tsumo=true` 自摸；`false` 荣和（进张为 `response_pai`）。
 ///
@@ -77,10 +93,38 @@ pub fn evaluateHora(ky: *const Kyoku, seat: Seat, tsumo: bool) HoraValue {
     return best;
 }
 
+test "isNagashi: river yaochuu and unclaimed" {
+    const std = @import("std");
+    const seat_tiles = @import("../seat_tiles.zig");
+
+    var ky = Kyoku.init();
+    seat_tiles.addToRiver(&ky, 0, "1m");
+    seat_tiles.addToSutehai(&ky, 0, "1m");
+    seat_tiles.addToRiver(&ky, 0, "E");
+    seat_tiles.addToSutehai(&ky, 0, "E");
+    try std.testing.expect(isNagashi(&ky, 0));
+
+    seat_tiles.addToRiver(&ky, 0, "5p");
+    seat_tiles.addToSutehai(&ky, 0, "5p");
+    try std.testing.expect(!isNagashi(&ky, 0));
+}
+
+test "isNagashi: claimed discard breaks" {
+    const std = @import("std");
+    const seat_tiles = @import("../seat_tiles.zig");
+
+    var ky = Kyoku.init();
+    seat_tiles.addToRiver(&ky, 0, "1m");
+    seat_tiles.addToSutehai(&ky, 0, "1m");
+    _ = seat_tiles.popRiver(&ky, 0);
+    try std.testing.expect(!isNagashi(&ky, 0));
+}
+
 test {
     _ = special;
     _ = standard;
     _ = furiten;
+    _ = waits;
     _ = yaku;
     _ = fu;
     _ = points;

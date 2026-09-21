@@ -2,6 +2,7 @@
 const pai_util = @import("../pai.zig");
 const types = @import("../../types.zig");
 const kyoku_mod = @import("../../kyoku.zig");
+const closed_mod = @import("closed.zig");
 
 const Pai = types.Pai;
 const Seat = types.Seat;
@@ -29,23 +30,18 @@ pub fn kyushuKinds(hand: []const Pai) u8 {
 pub fn detectSpecialForm(ky: *const Kyoku, seat: Seat, tsumo: bool) ?SpecialForm {
     if (ky.players[seat].fuuro_len != 0) return null;
     var closed_buf: [14]Pai = undefined;
-    const closed = collectClosed(ky, seat, tsumo, &closed_buf) orelse return null;
+    const closed = closed_mod.collectClosedFromKy(ky, seat, tsumo, &closed_buf) orelse return null;
     if (isChiitoi(closed)) return .chiitoi;
     if (isKokushi(closed)) return .kokushi;
     return null;
 }
 
-fn collectClosed(ky: *const Kyoku, seat: Seat, tsumo: bool, buf: *[14]Pai) ?[]const Pai {
-    const winning = (if (tsumo) ky.drawn else ky.response_pai) orelse return null;
-    const hand = ky.handSlice(seat);
-    if (tsumo) {
-        if (hand.len > 14) return null;
-        return hand;
-    }
-    if (hand.len >= 14) return null;
-    @memcpy(buf[0..hand.len], hand);
-    buf[hand.len] = winning;
-    return buf[0 .. hand.len + 1];
+/// 指定进张是否成七对/国士形（荣和视角拼闭张；供听牌扫描）。
+pub fn hasSpecialShape(ky: *const Kyoku, seat: Seat, winning: Pai) bool {
+    if (ky.players[seat].fuuro_len != 0) return false;
+    var closed_buf: [14]Pai = undefined;
+    const closed = closed_mod.collectClosed(ky, seat, false, winning, &closed_buf) orelse return false;
+    return isChiitoi(closed) or isKokushi(closed);
 }
 
 /// 14 张闭张是否七对形。

@@ -81,6 +81,7 @@ pub fn chombo(ky: *Kyoku, offender: Seat, reason: []const u8, out: []Event) []Ev
 test {
     _ = @import("wall.zig");
     _ = @import("referee/root.zig");
+    _ = @import("ryuukyoku.zig");
 }
 
 test "onStartGame deals 13 and draws for oya" {

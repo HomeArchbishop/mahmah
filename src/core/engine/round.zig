@@ -8,7 +8,6 @@ const window = @import("response_window.zig");
 const Kyoku = kyoku_mod.Kyoku;
 const Event = types.Event;
 const Seat = types.Seat;
-const ApplyError = types.ApplyError;
 const CAPACITY = types.CAPACITY;
 
 /// 开一局：清标志、洗牌发牌、亲家摸第一张；写出 start_kyoku + tsumo。
@@ -144,14 +143,4 @@ fn shouldEndGame(ky: *const Kyoku, renchan: bool) bool {
 
 pub fn nextSeat(seat: Seat) Seat {
     return @intCast((@as(u8, seat) + 1) % CAPACITY);
-}
-
-/// 九种九牌流局。
-pub fn applyKyushu(ky: *Kyoku, out: []Event) ApplyError![]Event {
-    if (!ky.is_first_turn) return error.IllegalAction;
-    var n: usize = 0;
-    out[n] = .{ .ryukyoku = .{ .reason = "kyushukyuhai", .deltas = .{ 0, 0, 0, 0 } } };
-    n += 1;
-    ky.honba += 1;
-    return afterKyokuEnd(ky, out, n);
 }

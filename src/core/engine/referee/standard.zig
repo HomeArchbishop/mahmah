@@ -19,6 +19,7 @@ const std = @import("std");
 const types = @import("../../types.zig");
 const kyoku_mod = @import("../../kyoku.zig");
 const pai_util = @import("../pai.zig");
+const closed_mod = @import("closed.zig");
 
 const Pai = types.Pai;
 const Seat = types.Seat;
@@ -101,7 +102,7 @@ fn standardDecompsWith(ky: *const Kyoku, seat: Seat, winning: Pai, tsumo: bool, 
     const need_mentsu: u8 = MAX_MENTSU - player.fuuro_len;
 
     var closed_buf: [14]Pai = undefined;
-    const closed = collectClosed(ky, seat, tsumo, winning, &closed_buf) orelse return out[0..0];
+    const closed = closed_mod.collectClosed(ky, seat, tsumo, winning, &closed_buf) orelse return out[0..0];
 
     var counts: [34]u8 = .{0} ** 34;
     for (closed) |tile| {
@@ -127,25 +128,6 @@ fn standardDecompsWith(ky: *const Kyoku, seat: Seat, winning: Pai, tsumo: bool, 
         }
     }
     return out[0..n];
-}
-
-/// 组装闭张牌列：自摸用手牌；荣和为手牌 + 进张。
-fn collectClosed(
-    ky: *const Kyoku,
-    seat: Seat,
-    tsumo: bool,
-    winning: Pai,
-    buf: *[14]Pai,
-) ?[]const Pai {
-    const hand = ky.handSlice(seat);
-    if (tsumo) {
-        if (hand.len > 14) return null;
-        return hand;
-    }
-    if (hand.len >= 14) return null;
-    @memcpy(buf[0..hand.len], hand);
-    buf[hand.len] = winning;
-    return buf[0 .. hand.len + 1];
 }
 
 // ---------------------------------------------------------------------------
