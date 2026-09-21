@@ -31,7 +31,8 @@ pub fn canAgari(ky: *const Kyoku, seat: Seat, tsumo: bool) bool {
     var decomps_buf: [64]standard.StandardDecomp = undefined;
     const decomps = standard.standardDecomps(ky, seat, tsumo, &decomps_buf);
     for (decomps) |decomp| {
-        if (yaku.hasYaku(ky, seat, tsumo, decomp)) return true;
+        const y = yaku.countYaku(ky, seat, tsumo, .standard, decomp);
+        if (y.yakuman > 0 or y.han > 0) return true;
     }
     return false;
 }
@@ -42,27 +43,20 @@ pub fn canKokushiRon(ky: *const Kyoku, seat: Seat) bool {
     return special.detectSpecialForm(ky, seat, false) == .kokushi;
 }
 
-/// 取最高点的和了番符（役/符可占位；多拆解取基本点最大）。
+/// 取最高点的和了番符（多拆解取基本点最大）。
 pub fn evaluateHora(ky: *const Kyoku, seat: Seat, tsumo: bool) HoraValue {
     if (special.detectSpecialForm(ky, seat, tsumo)) |form| {
-        return switch (form) {
-            .chiitoi => blk: {
-                const y = yaku.yakuChiitoi(ky, seat, tsumo, .{});
-                break :blk .{
-                    .han = y.han,
-                    .yakuman = y.yakuman,
-                    .fu = fu.fuChiitoi(ky, seat, tsumo),
-                };
-            },
-            .kokushi => blk: {
-                const y = yaku.yakuKokushi(ky, seat, tsumo, .{});
-                break :blk .{
-                    .han = y.han,
-                    .yakuman = y.yakuman,
-                    .fu = fu.fuKokushi(ky, seat, tsumo),
-                };
-            },
+        const yform: yaku.Form = switch (form) {
+            .chiitoi => .chiitoi,
+            .kokushi => .kokushi,
         };
+        const y = yaku.countYaku(ky, seat, tsumo, yform, .{});
+        const fform: fu.Form = switch (form) {
+            .chiitoi => .chiitoi,
+            .kokushi => .kokushi,
+        };
+        const fu_n = fu.countFu(ky, seat, tsumo, fform, .{});
+        return .{ .han = y.han, .yakuman = y.yakuman, .fu = fu_n };
     }
 
     var best: HoraValue = .{};
@@ -70,9 +64,9 @@ pub fn evaluateHora(ky: *const Kyoku, seat: Seat, tsumo: bool) HoraValue {
     var decomps_buf: [64]standard.StandardDecomp = undefined;
     const decomps = standard.standardDecomps(ky, seat, tsumo, &decomps_buf);
     for (decomps) |decomp| {
-        const y = yaku.yakuStandard(ky, seat, tsumo, decomp);
+        const y = yaku.countYaku(ky, seat, tsumo, .standard, decomp);
         if (y.yakuman == 0 and y.han == 0) continue;
-        const fu_n = fu.fuStandard(ky, seat, tsumo, decomp);
+        const fu_n = fu.countFu(ky, seat, tsumo, .standard, decomp);
         const cand: HoraValue = .{ .han = y.han, .fu = fu_n, .yakuman = y.yakuman };
         const bp = points.basicPoints(cand.han, cand.fu, cand.yakuman);
         if (bp > best_bp) {
