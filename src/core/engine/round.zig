@@ -80,6 +80,7 @@ fn clearRoundFlags(ky: *Kyoku) void {
     ky.claims_this_kyoku = 0;
     ky.kan_count = 0;
     ky.first_discards = .{ null, null, null, null };
+    ky.kuikae_len = 0;
     ky.response_pai = null;
     window.clear(ky);
     for (&ky.players) |*p| {

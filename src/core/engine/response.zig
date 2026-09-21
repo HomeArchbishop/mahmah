@@ -8,6 +8,7 @@ const discard = @import("discard.zig");
 const round = @import("round.zig");
 const hora = @import("hora.zig");
 const referee = @import("referee/root.zig");
+const kuikae = @import("kuikae.zig");
 const Kyoku = kyoku_mod.Kyoku;
 const Action = types.Action;
 const Event = types.Event;
@@ -139,6 +140,7 @@ fn applyCall(ky: *Kyoku, seat: Seat, action: Action, out: []Event) ApplyError![]
             seat_tiles.addFuuro(ky, seat, f);
             out[n] = .{ .chi = .{ .actor = seat, .target = target, .pai = pai, .consumed = c.consumed } };
             n += 1;
+            kuikae.setChi(ky, pai, c.consumed);
             return enterWaitActAfterCall(ky, seat, out, n);
         },
         .pon => |c| {
@@ -151,6 +153,7 @@ fn applyCall(ky: *Kyoku, seat: Seat, action: Action, out: []Event) ApplyError![]
             seat_tiles.addFuuro(ky, seat, f);
             out[n] = .{ .pon = .{ .actor = seat, .target = target, .pai = pai, .consumed = c.consumed } };
             n += 1;
+            kuikae.setPon(ky, pai);
             return enterWaitActAfterCall(ky, seat, out, n);
         },
         .daiminkan => |c| {

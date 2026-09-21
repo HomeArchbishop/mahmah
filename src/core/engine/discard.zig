@@ -7,6 +7,7 @@ const legal = @import("legal.zig");
 const window = @import("response_window.zig");
 const kan = @import("kan.zig");
 const ryuukyoku = @import("ryuukyoku.zig");
+const kuikae = @import("kuikae.zig");
 const Kyoku = kyoku_mod.Kyoku;
 const Event = types.Event;
 const Seat = types.Seat;
@@ -16,11 +17,13 @@ const CAPACITY = types.CAPACITY;
 
 /// 打牌入河；有应手则开窗，否则 acceptRiichi → abort → dealNext。
 pub fn resolveDiscard(ky: *Kyoku, seat: Seat, pai: Pai, tsumogiri: bool, out: []Event) ApplyError![]Event {
+    if (kuikae.forbids(ky, pai)) return error.IllegalAction;
     if (!seat_tiles.removeFromHand(ky, seat, pai, tsumogiri)) return error.IllegalAction;
     seat_tiles.addToRiver(ky, seat, pai);
     seat_tiles.addToSutehai(ky, seat, pai);
     ky.drawn = null;
     ky.turn = seat; // unnecessary, but just keep it as an anchor
+    kuikae.clear(ky);
 
     // 立直者再次打牌且未和 -> 清自己一发
     if (ky.players[seat].riichi) {

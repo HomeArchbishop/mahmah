@@ -3,6 +3,7 @@ const kyoku_mod = @import("../kyoku.zig");
 const pai_util = @import("pai.zig");
 const referee = @import("referee/root.zig");
 const round = @import("round.zig");
+const kuikae = @import("kuikae.zig");
 const Kyoku = kyoku_mod.Kyoku;
 const Action = types.Action;
 const Seat = types.Seat;
@@ -72,6 +73,8 @@ fn fillDahai(ky: *const Kyoku, seat: Seat, out: []Action) []Action {
         const tsumogiri = ky.drawn != null and i + 1 == hand_slice.len and types.paiEql(ky.drawn.?, pai);
         // 已立直：只能摸切
         if (p.riichi and !tsumogiri) continue;
+        // 食替禁切
+        if (kuikae.forbids(ky, pai)) continue;
         var dup = false;
         for (out[0..n]) |prev| {
             if (prev == .dahai and types.paiEql(prev.dahai.pai, pai) and prev.dahai.tsumogiri == tsumogiri) {

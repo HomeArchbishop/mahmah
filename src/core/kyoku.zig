@@ -127,6 +127,10 @@ pub const Kyoku = struct {
     /// 明杠（大明/加）待打牌后翻的指示牌张数
     pending_minkan_dora: u8 = 0,
 
+    /// 食替：吃碰后当巡禁切牌种（现物 + 吃的筋另一头）
+    kuikae_kinds: [2]u8 = .{ 0, 0 },
+    kuikae_len: u8 = 0,
+
     /// wait_response：最后切出的牌 / 加杠牌
     response_pai: ?Pai = null,
     response_from: types.Seat = 0,

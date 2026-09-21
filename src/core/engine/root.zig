@@ -7,6 +7,7 @@ const apply_mod = @import("apply.zig");
 const referee = @import("referee/root.zig");
 const legal = @import("legal.zig");
 const window = @import("response_window.zig");
+const kuikae = @import("kuikae.zig");
 
 const Kyoku = kyoku_mod.Kyoku;
 const Action = types.Action;
@@ -67,6 +68,7 @@ pub fn chombo(ky: *Kyoku, offender: Seat, reason: []const u8, out: []Event) []Ev
     ky.pending_riichi = null;
     ky.pending_minkan_dora = 0;
     ky.response_pai = null;
+    kuikae.clear(ky);
     window.clear(ky);
 
     var n: usize = 0;
@@ -82,6 +84,7 @@ test {
     _ = @import("wall.zig");
     _ = @import("referee/root.zig");
     _ = @import("ryuukyoku.zig");
+    _ = @import("kuikae.zig");
 }
 
 test "onStartGame deals 13 and draws for oya" {
@@ -167,4 +170,9 @@ test "pon claim then wait_act for caller" {
     try std.testing.expect(ky.turn == 1);
     try std.testing.expect(ky.drawn == null);
     try std.testing.expect(ky.players[1].fuuro_len == 1);
+
+    // 食替
+    try std.testing.expectError(error.IllegalAction, apply(&ky, 1, .{ .dahai = .{ .pai = "1m" } }, &out));
+    _ = try apply(&ky, 1, .{ .dahai = .{ .pai = "3m" } }, &out);
+    try std.testing.expectEqual(@as(u8, 0), ky.kuikae_len);
 }
