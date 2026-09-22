@@ -1,4 +1,4 @@
-//! 局生命周期：开局、发牌、终局、连庄、进局。
+//! 局生命周期：开局、发牌、终局、连庄、进局（半庄：东场 + 南入）。
 const std = @import("std");
 const types = @import("../types.zig");
 const kyoku_mod = @import("../kyoku.zig");
@@ -9,6 +9,9 @@ const Kyoku = kyoku_mod.Kyoku;
 const Event = types.Event;
 const Seat = types.Seat;
 const CAPACITY = types.CAPACITY;
+
+/// 返し点：东 4 终了时无人达到则南入。
+pub const RETURN_SCORE: i32 = 30000;
 
 /// 开一局：清标志、洗牌发牌、亲家摸第一张；写出 start_kyoku + tsumo。
 pub fn initializeRound(ky: *Kyoku, out: []Event) []Event {
@@ -137,11 +140,94 @@ pub fn afterKyokuEndRenchan(ky: *Kyoku, out: []Event, start: usize, renchan: boo
     return out[0 .. n + rest.len];
 }
 
+/// 半庄终战（无西入）：
+/// - 连庄不终战
+/// - 东 4：有人 ≥ 返し点则终战，否则南入
+/// - 南 4：终战
 fn shouldEndGame(ky: *const Kyoku, renchan: bool) bool {
     if (renchan) return false;
-    return std.mem.eql(u8, ky.bakaze, "E") and ky.kyoku == 4;
+    if (std.mem.eql(u8, ky.bakaze, "E") and ky.kyoku == 4) {
+        return anyReachedReturn(ky);
+    }
+    if (std.mem.eql(u8, ky.bakaze, "S") and ky.kyoku == 4) {
+        return true;
+    }
+    return false;
+}
+
+fn anyReachedReturn(ky: *const Kyoku) bool {
+    for (ky.scores) |s| {
+        if (s >= RETURN_SCORE) return true;
+    }
+    return false;
 }
 
 pub fn nextSeat(seat: Seat) Seat {
     return @intCast((@as(u8, seat) + 1) % CAPACITY);
+}
+
+test "shouldEndGame: east4 below return → 南入" {
+    var ky = Kyoku.init();
+    ky.bakaze = "E";
+    ky.kyoku = 4;
+    ky.scores = .{ 25000, 26000, 24000, 25000 };
+    try std.testing.expect(!shouldEndGame(&ky, false));
+}
+
+test "shouldEndGame: east4 with return → end" {
+    var ky = Kyoku.init();
+    ky.bakaze = "E";
+    ky.kyoku = 4;
+    ky.scores = .{ 25000, 30000, 24000, 21000 };
+    try std.testing.expect(!shouldEndGame(&ky, true));
+    try std.testing.expect(shouldEndGame(&ky, false));
+}
+
+test "shouldEndGame: south4 → end" {
+    var ky = Kyoku.init();
+    ky.bakaze = "S";
+    ky.kyoku = 4;
+    ky.scores = .{ 20000, 20000, 20000, 40000 };
+    try std.testing.expect(shouldEndGame(&ky, false));
+    try std.testing.expect(!shouldEndGame(&ky, true));
+}
+
+test "afterKyokuEnd: east4 南入 advances to south1" {
+    var ky = Kyoku.init();
+    ky.bakaze = "E";
+    ky.kyoku = 4;
+    ky.oya = 3;
+    ky.scores = .{ 25000, 25000, 25000, 25000 };
+    ky.shuffle_seed = 1;
+    var buf: [16]Event = undefined;
+    const out = afterKyokuEnd(&ky, &buf, 0);
+    try std.testing.expect(out[0] == .end_kyoku);
+    try std.testing.expectEqualStrings("S", ky.bakaze);
+    try std.testing.expectEqual(@as(u8, 1), ky.kyoku);
+    try std.testing.expectEqual(@as(Seat, 0), ky.oya);
+    try std.testing.expect(ky.phase == .wait_act);
+    var saw_start = false;
+    for (out) |ev| {
+        if (ev == .start_kyoku) {
+            saw_start = true;
+            try std.testing.expectEqualStrings("S", ev.start_kyoku.bakaze);
+            try std.testing.expectEqual(@as(u8, 1), ev.start_kyoku.kyoku);
+        }
+        try std.testing.expect(ev != .end_game);
+    }
+    try std.testing.expect(saw_start);
+}
+
+test "afterKyokuEnd: east4 reached return → end_game" {
+    var ky = Kyoku.init();
+    ky.bakaze = "E";
+    ky.kyoku = 4;
+    ky.oya = 0;
+    ky.scores = .{ 31000, 23000, 23000, 23000 };
+    var buf: [8]Event = undefined;
+    const out = afterKyokuEnd(&ky, &buf, 0);
+    try std.testing.expect(out.len == 2);
+    try std.testing.expect(out[0] == .end_kyoku);
+    try std.testing.expect(out[1] == .end_game);
+    try std.testing.expect(ky.phase == .idle);
 }
