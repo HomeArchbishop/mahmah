@@ -57,7 +57,7 @@ fn settle(ky: *Kyoku, out: []Event) ApplyError![]Event {
 
     if (ron_n >= 3) {
         var n: usize = 0;
-        out[n] = .{ .ryukyoku = .{ .reason = "sanchahou", .deltas = .{ 0, 0, 0, 0 } } };
+        out[n] = .{ .ryukyoku = .{ .reason = "sanchaho", .deltas = .{ 0, 0, 0, 0 } } };
         n += 1;
         window.clear(ky);
         ky.pending_kan = null;
@@ -119,6 +119,11 @@ fn settle(ky: *Kyoku, out: []Event) ApplyError![]Event {
 fn applyCall(ky: *Kyoku, seat: Seat, action: Action, out: []Event) ApplyError![]Event {
     const pai = ky.response_pai orelse return error.IllegalAction;
     const target = ky.response_from;
+
+    // 宣言打被鸣：立直仍成立（先承认再计鸣牌，双立直看鸣前 claims）
+    var n: usize = 0;
+    n = discard.acceptRiichi(ky, out, n);
+
     _ = seat_tiles.popRiver(ky, target);
     // 吃碰杠消去同巡（河仍 pop；舍张 sutehai 保留）
     seat_tiles.clearDoujunFuriten(ky, seat);
@@ -126,9 +131,7 @@ fn applyCall(ky: *Kyoku, seat: Seat, action: Action, out: []Event) ApplyError![]
     seat_tiles.clearIppatsuAll(ky);
     ky.claims_this_kyoku += 1;
     ky.is_first_turn = false;
-    ky.pending_riichi = null;
 
-    var n: usize = 0;
     switch (action) {
         .chi => |c| {
             if (!types.paiEql(c.pai, pai)) return error.IllegalAction;

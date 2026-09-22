@@ -1,4 +1,4 @@
-//! 流局附加结算包装：荒牌 howanpai、九种九牌。
+//! 流局附加结算包装：荒牌 exhaustive_draw、九种九牌。
 //!
 //! # 依赖（单向）
 //! - 本模块 → `referee`（听牌 / 流满判定、得点）
@@ -26,7 +26,7 @@ const CAPACITY = types.CAPACITY;
 pub fn applyKyushu(ky: *Kyoku, out: []Event) ApplyError![]Event {
     if (!ky.is_first_turn) return error.IllegalAction;
     var n: usize = 0;
-    out[n] = .{ .ryukyoku = .{ .reason = "kyushukyuhai", .deltas = .{ 0, 0, 0, 0 } } };
+    out[n] = .{ .ryukyoku = .{ .reason = "kyushu_kyuhai", .deltas = .{ 0, 0, 0, 0 } } };
     n += 1;
     ky.honba += 1;
     return round.afterKyokuEnd(ky, out, n);
@@ -72,7 +72,7 @@ pub fn applyHowanpai(ky: *Kyoku, out: []Event, start: usize) []Event {
     ky.honba += 1;
 
     var n = start;
-    out[n] = .{ .ryukyoku = .{ .reason = "howanpai", .deltas = deltas } };
+    out[n] = .{ .ryukyoku = .{ .reason = "exhaustive_draw", .deltas = deltas } };
     n += 1;
     return round.afterKyokuEndRenchan(ky, out, n, renchan);
 }

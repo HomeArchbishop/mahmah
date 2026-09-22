@@ -1,11 +1,11 @@
-"""MJAI 事件 / 合法着规范化与比较。"""
+"""MJAI 事件 / 合法着规范化与比较。
+
+仅对多重集字段排序（tehais / consumed），不抹平协议字段差。
+"""
 from __future__ import annotations
 
 import copy
 from typing import Any
-
-
-IGNORE_KEYS = {"scores", "id", "actor"}  # actor 在合法着里常由 seat 隐含
 
 
 def _sort_tehais(tehais: list[list[str]] | None) -> list[list[str]] | None:
@@ -16,56 +16,11 @@ def _sort_tehais(tehais: list[list[str]] | None) -> list[list[str]] | None:
 
 def normalize_event(ev: dict[str, Any]) -> dict[str, Any]:
     e = copy.deepcopy(ev)
-    for k in list(e.keys()):
-        if k in ("id",):
-            del e[k]
-    # start_kyoku scores：两边有则比，仅一边有则忽略
-    if e.get("type") == "start_kyoku" and "scores" in e:
-        # 保留，由调用方保证两边都有或都无；diff 时若仅 core 无则删
-        pass
-
-    if "dora_marker" in e:
-        dm = e["dora_marker"]
-        if isinstance(dm, list):
-            e["dora_marker"] = dm[0] if len(dm) == 1 else dm
-
+    e.pop("id", None)
     if "tehais" in e:
         e["tehais"] = _sort_tehais(e["tehais"])
-
     if "consumed" in e and isinstance(e["consumed"], list):
         e["consumed"] = sorted(e["consumed"])
-
-    # ankan：标准可能带 pai，core 只有 consumed
-    if e.get("type") == "ankan":
-        e.pop("pai", None)
-
-    if e.get("type") == "dahai" and "tsumogiri" not in e:
-        e["tsumogiri"] = False
-
-    # hora：core 目前只发 actor/target/pai；先只比座位
-    if e.get("type") == "hora":
-        e = {
-            "type": "hora",
-            "actor": e.get("actor"),
-            "target": e.get("target"),
-        }
-
-    if e.get("type") == "ryukyoku":
-        reason = e.get("reason")
-        aliases = {
-            "howanpai": "exhaustive_draw",
-            "exhaustive_draw": "exhaustive_draw",
-            "yao9": "kyushukyuhai",
-            "kyushu_kyuhai": "kyushukyuhai",
-            "kyushukyuhai": "kyushukyuhai",
-            "suukaikan": "suukaikan",
-            "suufonrenda": "suufonrenda",
-            "suuchariichi": "suuchariichi",
-            "sanchahou": "sanchahou",
-        }
-        if reason in aliases:
-            e["reason"] = aliases[reason]
-
     return e
 
 
@@ -75,18 +30,6 @@ def events_equal(
 ) -> tuple[bool, str]:
     a = [normalize_event(x) for x in oracle]
     b = [normalize_event(x) for x in under_test]
-    # start_kyoku：仅一边带 scores 时两边都去掉
-    for lst in (a, b):
-        for e in lst:
-            if e.get("type") == "start_kyoku":
-                pass
-    if any(e.get("type") == "start_kyoku" and "scores" in e for e in a) != any(
-        e.get("type") == "start_kyoku" and "scores" in e for e in b
-    ):
-        for e in a + b:
-            if e.get("type") == "start_kyoku":
-                e.pop("scores", None)
-
     if a == b:
         return True, ""
     n = max(len(a), len(b))
@@ -121,7 +64,6 @@ def action_key(action: dict[str, Any]) -> tuple:
         return ("ankan", tuple(sorted(action.get("consumed") or [])))
     if t in ("reach", "hora", "none", "ryukyoku"):
         return (t,)
-    # 其它字段尽量纳入
     rest = {k: action[k] for k in sorted(action) if k not in ("type", "actor", "request_id")}
     if "consumed" in rest and isinstance(rest["consumed"], list):
         rest["consumed"] = tuple(sorted(rest["consumed"]))

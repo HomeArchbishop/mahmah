@@ -4,6 +4,8 @@ const std = @import("std");
 pub const Seat = u2;
 pub const CAPACITY: usize = 4;
 pub const TEHAI_LEN: usize = 13;
+/// 表/里宝指示牌上限（开局 1，杠后最多再翻 4）
+pub const DORA_MARKER_CAP: usize = 5;
 
 /// MJAI 牌面字符串，如 "1m" / "E" / "?"。只指向字面量或长期存活缓冲。
 pub const Pai = []const u8;
@@ -83,11 +85,13 @@ pub const Event = union(enum) {
 
     start_kyoku: struct {
         bakaze: Kaze,
+        /// 开局表宝指示（wire 为单张字符串）
         dora_markers: []const Pai,
         kyoku: u8,
         honba: u8,
         kyotaku: u8,
         oya: Seat,
+        scores: [CAPACITY]i32,
         tehais: Tehais,
     },
 
@@ -97,7 +101,7 @@ pub const Event = union(enum) {
     chi: struct { actor: Seat, target: Seat, pai: Pai, consumed: [2]Pai },
     pon: struct { actor: Seat, target: Seat, pai: Pai, consumed: [2]Pai },
     daiminkan: struct { actor: Seat, target: Seat, pai: Pai, consumed: [3]Pai },
-    ankan: struct { actor: Seat, consumed: [4]Pai },
+    ankan: struct { actor: Seat, pai: Pai, consumed: [4]Pai },
     kakan: struct { actor: Seat, pai: Pai, consumed: [3]Pai },
 
     /// 杠后新翻开的一张宝牌指示牌
@@ -111,6 +115,10 @@ pub const Event = union(enum) {
         /// 自摸时 target == actor
         target: Seat,
         pai: Pai,
+        deltas: [CAPACITY]i32,
+        ura_markers: [DORA_MARKER_CAP]Pai = undefined,
+        ura_markers_len: u8 = 0,
+        tsumo: bool,
     },
 
     ryukyoku: struct {

@@ -52,6 +52,7 @@ fn finishDeal(ky: *Kyoku, out: []Event) []Event {
         .honba = ky.honba,
         .kyotaku = ky.kyotaku,
         .oya = ky.oya,
+        .scores = ky.scores,
         .tehais = ky.tehaisForEvent(),
     } };
     n += 1;

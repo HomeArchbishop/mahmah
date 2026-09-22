@@ -92,6 +92,10 @@ fn yakuStandard(ky: *const Kyoku, seat: Seat, tsumo: bool, decomp: Decomp) YakuC
     add(&total, shousangen(ky, seat, tsumo, decomp));
     add(&total, honiisoo(ky, seat, tsumo, decomp));
     add(&total, chiniisoo(ky, seat, tsumo, decomp));
+
+    // 宝牌不是役：无役时即使有表/里/赤也不能和
+    if (total.han == 0) return .{};
+
     add(&total, dora(ky, seat, tsumo, decomp));
     add(&total, uradora(ky, seat, tsumo, decomp));
     add(&total, akadora(ky, seat, tsumo, decomp));

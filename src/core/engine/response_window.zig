@@ -1,4 +1,5 @@
 //! 应手窗开关（不依赖 discard/kan/response，用于拆循环依赖）。
+const std = @import("std");
 const types = @import("../types.zig");
 const kyoku_mod = @import("../kyoku.zig");
 const legal = @import("legal.zig");
@@ -20,17 +21,17 @@ pub fn anyOpen(ky: *const Kyoku) bool {
     return false;
 }
 
-/// 开打牌应手窗。
-pub fn openDiscardResponse(ky: *Kyoku, discarder: Seat, pai: Pai) void {
+/// 开打牌应手窗。调用前须已写入 `response_pai`。
+pub fn openDiscardResponse(ky: *Kyoku, discarder: Seat) void {
+    std.debug.assert(ky.response_pai != null);
     ky.phase = .wait_response;
-    ky.response_pai = pai;
     ky.response_from = discarder;
     ky.pending_kan = null;
     ky.pending_ankan = false;
     clear(ky);
     var s: u8 = 0;
     while (s < CAPACITY) : (s += 1) {
-        if (legal.seatHasClaim(ky, @intCast(s), discarder, pai, false)) {
+        if (legal.seatHasClaim(ky, @intCast(s), discarder, false)) {
             ky.response_open[s] = true;
         }
     }
@@ -49,9 +50,9 @@ pub fn openChankan(ky: *Kyoku, kan_actor: Seat, pai: Pai, ankan: bool) void {
         if (s == kan_actor) continue;
         const seat: Seat = @intCast(s);
         const can = if (ankan)
-            legal.canKokushiChankan(ky, seat, pai)
+            legal.canKokushiChankan(ky, seat)
         else
-            legal.seatHasClaim(ky, seat, kan_actor, pai, true);
+            legal.seatHasClaim(ky, seat, kan_actor, true);
         if (can) ky.response_open[s] = true;
     }
 }

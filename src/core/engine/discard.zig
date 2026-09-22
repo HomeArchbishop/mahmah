@@ -49,11 +49,13 @@ pub fn resolveDiscard(ky: *Kyoku, seat: Seat, pai: Pai, tsumogiri: bool, out: []
         ky.is_first_turn = false;
     }
 
-    if (legal.hasClaimOpportunity(ky, seat, pai)) {
-        window.openDiscardResponse(ky, seat, pai);
+    // 应手进张：先写入再探测（荣和/吃碰统一读 response_pai）
+    ky.response_pai = pai;
+    if (legal.hasClaimOpportunity(ky, seat)) {
+        window.openDiscardResponse(ky, seat);
         return out[0..n];
     }
-
+    ky.response_pai = null;
     return afterNoClaim(ky, out, n);
 }
 
@@ -81,7 +83,7 @@ pub fn afterNoClaim(ky: *Kyoku, out: []Event, start: usize) []Event {
 }
 
 /// 立直承认：扣 1000、kyotaku+1、发 reach_accepted。
-fn acceptRiichi(ky: *Kyoku, out: []Event, start: usize) usize {
+pub fn acceptRiichi(ky: *Kyoku, out: []Event, start: usize) usize {
     const seat = ky.pending_riichi orelse return start;
     ky.pending_riichi = null;
     const p = &ky.players[seat];
@@ -98,9 +100,9 @@ fn acceptRiichi(ky: *Kyoku, out: []Event, start: usize) usize {
 }
 
 fn tochuRyukyokuReason(ky: *const Kyoku) []const u8 {
-    if (fourWinds(ky)) return "sufonrenda";
-    if (fourKans(ky)) return "suukaikan";
-    if (fourRiichi(ky)) return "suuchariichi";
+    if (fourWinds(ky)) return "sufuurenta";
+    if (fourKans(ky)) return "suukansansen";
+    if (fourRiichi(ky)) return "suucha_riichi";
     return "abort";
 }
 

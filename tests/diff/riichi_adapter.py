@@ -105,15 +105,16 @@ class RiichiEngine:
     def done(self) -> bool:
         return self.env.done()
 
-    def pick_action(self, seat: int) -> dict:
+    def pick_action(self, seat: int, *, priority: dict | None = None) -> dict:
         """固定优先级：和 > 立直 > 碰/杠 > 吃 > 切 > 流 > 过。同级按 mjai 字典序。"""
         obs = self._obs[seat]
         acts = list(obs.legal_actions())
         if not acts:
             raise RuntimeError(f"no legal actions for seat {seat}")
+        pri_map = priority or _ACTION_PRIORITY
 
         def sort_key(a) -> tuple:
-            pri = _ACTION_PRIORITY.get(a.action_type, 15)
+            pri = pri_map.get(a.action_type, 15)
             mjai = self._action_to_mjai(a)
             # 去掉 actor 再序列化，保证稳定
             slim = {k: v for k, v in mjai.items() if k != "actor"}

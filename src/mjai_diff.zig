@@ -35,7 +35,7 @@ fn internPai(s: []const u8) ?Pai {
     return null;
 }
 
-/// riichienv / 天凤牌山（下标 0=首摸）→ 本引擎 tiles 布局。
+/// 外部给的 136 张序（下标 0=首摸）→ 本引擎 tiles 布局。
 fn mapPaishanToTiles(paishan: *const [WALL_LEN]Pai, out: *[WALL_LEN]Pai) void {
     @memset(out, "?");
     var n: u8 = 0;

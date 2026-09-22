@@ -80,10 +80,19 @@ pub fn encodeEventForSeat(event: Event, viewer: ?Seat, buf: []u8) ![]const u8 {
     switch (event) {
         .start_game => try append(buf, &pos, "{\"type\":\"start_game\"}"),
         .start_kyoku => |k| {
-            try appendFmt(buf, &pos, "{{\"type\":\"start_kyoku\",\"bakaze\":\"{s}\",\"dora_marker\":", .{k.bakaze});
-            try encodePaiList(k.dora_markers, buf, &pos);
-            try appendFmt(buf, &pos, ",\"kyoku\":{d},\"honba\":{d},\"kyotaku\":{d},\"oya\":{d},\"tehais\":", .{
-                k.kyoku, k.honba, k.kyotaku, k.oya,
+            // wire：开局 dora_marker 为单张；scores 与场况一并给出
+            const dm = if (k.dora_markers.len > 0) k.dora_markers[0] else "?";
+            try appendFmt(buf, &pos, "{{\"type\":\"start_kyoku\",\"bakaze\":\"{s}\",\"dora_marker\":\"{s}\",\"kyoku\":{d},\"honba\":{d},\"kyotaku\":{d},\"oya\":{d},\"scores\":[{d},{d},{d},{d}],\"tehais\":", .{
+                k.bakaze,
+                dm,
+                k.kyoku,
+                k.honba,
+                k.kyotaku,
+                k.oya,
+                k.scores[0],
+                k.scores[1],
+                k.scores[2],
+                k.scores[3],
             });
             if (viewer) |v| {
                 try encodeTehaisMasked(k.tehais, v, buf, &pos);
@@ -118,7 +127,7 @@ pub fn encodeEventForSeat(event: Event, viewer: ?Seat, buf: []u8) ![]const u8 {
             try append(buf, &pos, "}");
         },
         .ankan => |c| {
-            try appendFmt(buf, &pos, "{{\"type\":\"ankan\",\"actor\":{d},\"consumed\":", .{c.actor});
+            try appendFmt(buf, &pos, "{{\"type\":\"ankan\",\"actor\":{d},\"pai\":\"{s}\",\"consumed\":", .{ c.actor, c.pai });
             try encodePaiList(&c.consumed, buf, &pos);
             try append(buf, &pos, "}");
         },
@@ -130,7 +139,22 @@ pub fn encodeEventForSeat(event: Event, viewer: ?Seat, buf: []u8) ![]const u8 {
         .dora => |d| try appendFmt(buf, &pos, "{{\"type\":\"dora\",\"dora_marker\":\"{s}\"}}", .{d.dora_marker}),
         .reach => |r| try appendFmt(buf, &pos, "{{\"type\":\"reach\",\"actor\":{d}}}", .{r.actor}),
         .reach_accepted => |r| try appendFmt(buf, &pos, "{{\"type\":\"reach_accepted\",\"actor\":{d}}}", .{r.actor}),
-        .hora => |h| try appendFmt(buf, &pos, "{{\"type\":\"hora\",\"actor\":{d},\"target\":{d},\"pai\":\"{s}\"}}", .{ h.actor, h.target, h.pai }),
+        .hora => |h| {
+            // wire：actor/target/deltas/ura_markers；自摸时带 tsumo=true（荣和省略）
+            try appendFmt(buf, &pos, "{{\"type\":\"hora\",\"actor\":{d},\"target\":{d},\"deltas\":[{d},{d},{d},{d}],\"ura_markers\":", .{
+                h.actor,
+                h.target,
+                h.deltas[0],
+                h.deltas[1],
+                h.deltas[2],
+                h.deltas[3],
+            });
+            try encodePaiList(h.ura_markers[0..h.ura_markers_len], buf, &pos);
+            if (h.tsumo) {
+                try append(buf, &pos, ",\"tsumo\":true");
+            }
+            try append(buf, &pos, "}");
+        },
         .ryukyoku => |r| {
             try appendFmt(buf, &pos, "{{\"type\":\"ryukyoku\",\"reason\":\"{s}\",\"deltas\":[{d},{d},{d},{d}]", .{
                 r.reason, r.deltas[0], r.deltas[1], r.deltas[2], r.deltas[3],

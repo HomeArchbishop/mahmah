@@ -3,6 +3,7 @@ const kyoku_mod = @import("../kyoku.zig");
 const seat_tiles = @import("seat_tiles.zig");
 const wall = @import("wall.zig");
 const window = @import("response_window.zig");
+const legal = @import("legal.zig");
 const Kyoku = kyoku_mod.Kyoku;
 const Event = types.Event;
 const Seat = types.Seat;
@@ -10,6 +11,7 @@ const Pai = types.Pai;
 const ApplyError = types.ApplyError;
 
 /// 暗槓は即めくり；明槓（大明・加）は打牌時（打牌イベント前）めくり。
+/// 岭上未打牌又杠时，先翻齐上次待翻的明杠指示，再按本次时机处理。
 pub const DoraReveal = enum {
     immediate,
     after_discard,
@@ -18,6 +20,8 @@ pub const DoraReveal = enum {
 /// 杠后：按时机翻指示 / 岭上摸牌 / 进入 wait_act。
 pub fn resolveKan(ky: *Kyoku, actor: Seat, out: []Event, start: usize, dora: DoraReveal) []Event {
     var n = start;
+    // 连杠：先翻上次明杠未翻的指示（例：kakan → dora → tsumo）
+    n = flushMinkanDora(ky, out, n);
     switch (dora) {
         .immediate => n = appendRevealDora(ky, out, n),
         .after_discard => ky.pending_minkan_dora += 1,
@@ -68,6 +72,8 @@ fn appendRevealDora(ky: *Kyoku, out: []Event, start: usize) usize {
 pub fn applyAnkan(ky: *Kyoku, seat: Seat, consumed: [4]Pai, out: []Event) ApplyError![]Event {
     if (ky.drawn == null) return error.IllegalAction;
     if (!ky.yama.hasLive()) return error.IllegalAction;
+    if (ky.players[seat].riichi and !legal.ankanPreservesWaits(ky, seat, consumed[0]))
+        return error.IllegalAction;
     if (!seat_tiles.removeExactTiles(ky, seat, &consumed)) return error.IllegalAction;
     ky.drawn = null;
     seat_tiles.clearDoujunFuriten(ky, seat);
@@ -83,7 +89,7 @@ pub fn applyAnkan(ky: *Kyoku, seat: Seat, consumed: [4]Pai, out: []Event) ApplyE
     ky.is_first_turn = false;
 
     var n: usize = 0;
-    out[n] = .{ .ankan = .{ .actor = seat, .consumed = consumed } };
+    out[n] = .{ .ankan = .{ .actor = seat, .pai = consumed[0], .consumed = consumed } };
     n += 1;
 
     window.openChankan(ky, seat, consumed[0], true);

@@ -29,27 +29,41 @@ pub fn isTenpai(closed: []const Pai, fuuro_len: u8) bool {
     return false;
 }
 
-/// 写入全部听牌 kind。供振听 / 听牌判定共用。
-pub fn fillWaits(ky: *const Kyoku, seat: Seat, waits: *[34]bool) void {
-    const hand = ky.handSlice(seat);
-    const fuuro_len = ky.players[seat].fuuro_len;
+/// 写入 `closed`（未含进张）在给定副露数下的听牌 kind。会先清零 `waits`。
+pub fn fillWaitsClosed(closed: []const Pai, fuuro_len: u8, waits: *[34]bool) void {
+    @memset(waits, false);
     const expect_closed: usize = @as(usize, 4 - fuuro_len) * 3 + 2;
-    if (hand.len + 1 != expect_closed) return;
+    if (closed.len + 1 != expect_closed) return;
 
     var id: u8 = 0;
     while (id < 34) : (id += 1) {
         const cand = pai_util.fromKindId(id) orelse continue;
         if (fuuro_len == 0) {
             var full: [14]Pai = undefined;
-            @memcpy(full[0..hand.len], hand);
-            full[hand.len] = cand;
-            if (special.isChiitoi(full[0 .. hand.len + 1]) or special.isKokushi(full[0 .. hand.len + 1])) {
+            if (closed.len >= full.len) continue;
+            @memcpy(full[0..closed.len], closed);
+            full[closed.len] = cand;
+            if (special.isChiitoi(full[0 .. closed.len + 1]) or special.isKokushi(full[0 .. closed.len + 1])) {
                 waits[id] = true;
                 continue;
             }
         }
-        if (standard.hasStandardShape(hand, fuuro_len, cand)) {
+        if (standard.hasStandardShape(closed, fuuro_len, cand)) {
             waits[id] = true;
         }
     }
+}
+
+/// 写入全部听牌 kind。供振听 / 听牌判定共用。
+pub fn fillWaits(ky: *const Kyoku, seat: Seat, waits: *[34]bool) void {
+    fillWaitsClosed(ky.handSlice(seat), ky.players[seat].fuuro_len, waits);
+}
+
+/// 两听口集合是否完全相同。
+pub fn waitsEqual(a: *const [34]bool, b: *const [34]bool) bool {
+    return std_memEql(a, b);
+}
+
+fn std_memEql(a: *const [34]bool, b: *const [34]bool) bool {
+    return @import("std").mem.eql(bool, a, b);
 }

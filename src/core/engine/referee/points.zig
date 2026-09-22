@@ -1,4 +1,7 @@
 //! 得点：基本点、和了得失、罚符。不含役/符判定。
+//!
+//! 不满贯：基本点 = 符 × 2^(翻+2)（不先整百）；各家支付额再进位到 100。
+//! 满贯以上用表定基本点。含切上满贯（3 翻 60 符 / 4 翻 30 符）。
 const std = @import("std");
 const types = @import("../../types.zig");
 
@@ -49,7 +52,7 @@ pub fn chomboDeltas(offender: Seat, oya: Seat) [CAPACITY]i32 {
     return d;
 }
 
-/// 基本点（非役满进位到 100；满贯以上为表定基本点）。
+/// 基本点。不满贯返回未整百的 raw（支付时再进位）；满贯以上为表定值。
 pub fn basicPoints(han: u8, fu: u16, yakuman: u8) u32 {
     if (yakuman > 0) return 8000 * @as(u32, yakuman);
     if (han >= 13) return 8000;
@@ -59,11 +62,13 @@ pub fn basicPoints(han: u8, fu: u16, yakuman: u8) u32 {
     if (han >= 5) return 2000;
     if (han == 0 or fu == 0) return 0;
 
+    // 切上满贯：4 翻 30 符、3 翻 60 符
+    if ((han >= 4 and fu >= 30) or (han == 3 and fu >= 60)) return 2000;
+
     const shift: u5 = @intCast(@min(han + 2, 31));
-    var bp: u32 = @as(u32, fu) * (@as(u32, 1) << shift);
-    bp = ceil100(bp);
-    if (bp > 2000) bp = 2000;
-    return bp;
+    const raw: u32 = @as(u32, fu) * (@as(u32, 1) << shift);
+    if (raw >= 2000) return 2000;
+    return raw;
 }
 
 /// 按番符计算一家和了的点数差（含本场；`kyotaku` 为供托棒数）。
@@ -120,29 +125,52 @@ fn ceil100(x: u32) u32 {
     return ((x + 99) / 100) * 100;
 }
 
-test "basicPoints 1han 30fu" {
-    try std.testing.expectEqual(@as(u32, 300), basicPoints(1, 30, 0));
+test "basicPoints 1han 30fu raw" {
+    try std.testing.expectEqual(@as(u32, 240), basicPoints(1, 30, 0));
+}
+
+test "basicPoints kiriage mangan 4han 30fu" {
+    try std.testing.expectEqual(@as(u32, 2000), basicPoints(4, 30, 0));
+}
+
+test "basicPoints kiriage mangan 3han 60fu" {
+    try std.testing.expectEqual(@as(u32, 2000), basicPoints(3, 60, 0));
 }
 
 test "horaDeltas child ron 1han 30fu" {
     const v: HoraValue = .{ .han = 1, .fu = 30 };
     const d = horaDeltas(1, 0, 0, v, 0, 0, false);
-    try std.testing.expectEqual(@as(i32, -1200), d[0]);
-    try std.testing.expectEqual(@as(i32, 1200), d[1]);
+    try std.testing.expectEqual(@as(i32, -1000), d[0]);
+    try std.testing.expectEqual(@as(i32, 1000), d[1]);
+}
+
+test "horaDeltas child ron 1han 30fu 1honba" {
+    const v: HoraValue = .{ .han = 1, .fu = 30 };
+    const d = horaDeltas(1, 0, 0, v, 1, 0, false);
+    try std.testing.expectEqual(@as(i32, -1300), d[0]);
+    try std.testing.expectEqual(@as(i32, 1300), d[1]);
 }
 
 test "horaDeltas dealer ron 1han 30fu" {
     const v: HoraValue = .{ .han = 1, .fu = 30 };
     const d = horaDeltas(0, 1, 0, v, 0, 0, false);
-    try std.testing.expectEqual(@as(i32, 1800), d[0]);
-    try std.testing.expectEqual(@as(i32, -1800), d[1]);
+    try std.testing.expectEqual(@as(i32, 1500), d[0]);
+    try std.testing.expectEqual(@as(i32, -1500), d[1]);
+}
+
+test "horaDeltas dealer ron 4han 30fu 2honba kiriage" {
+    // 切上满贯 12000 + 600 = 12600
+    const v: HoraValue = .{ .han = 4, .fu = 30 };
+    const d = horaDeltas(2, 3, 2, v, 2, 0, false);
+    try std.testing.expectEqual(@as(i32, 12600), d[2]);
+    try std.testing.expectEqual(@as(i32, -12600), d[3]);
 }
 
 test "horaDeltas child tsumo 1han 30fu" {
     const v: HoraValue = .{ .han = 1, .fu = 30 };
     const d = horaDeltas(1, 1, 0, v, 0, 0, true);
-    try std.testing.expectEqual(@as(i32, -600), d[0]);
-    try std.testing.expectEqual(@as(i32, 1200), d[1]);
+    try std.testing.expectEqual(@as(i32, -500), d[0]);
+    try std.testing.expectEqual(@as(i32, 1100), d[1]);
     try std.testing.expectEqual(@as(i32, -300), d[2]);
     try std.testing.expectEqual(@as(i32, -300), d[3]);
 }

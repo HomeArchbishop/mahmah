@@ -21,6 +21,9 @@ pub const horaDeltas = points.horaDeltas;
 pub const notenDeltas = points.notenDeltas;
 pub const HoraValue = points.HoraValue;
 pub const isTenpai = waits.isTenpai;
+pub const fillWaitsClosed = waits.fillWaitsClosed;
+pub const waitsEqual = waits.waitsEqual;
+
 
 /// 流局满贯形：河牌全幺九，且舍张从未被鸣（`sutehai_len == river_len`）。
 pub fn isNagashi(ky: *const Kyoku, seat: Seat) bool {
