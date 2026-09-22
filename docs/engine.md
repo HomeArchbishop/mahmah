@@ -12,6 +12,7 @@
 2. **Game / Kyoku 分离**：`Desk.game_phase` 管整盘（`finished` = 多局后整盘结束）；`Kyoku` / `KyokuPhase` 管局内；禁止用含糊的 `Desk.start()` 包办。
 3. **bot 只挂在 room**：`room → bot`；lobby / core 不 import bot。bot 实现 `Sender`，与真人同一 `connections`；回包经 `Room.onMessage`，`deliverOutcome` 末尾 `flushBotReplies`。
 4. **chombo 策略 A**：`apply` 失败 → `Desk` 合成 `action_resolved{rejected|unparseable}`，必要时再追加流局/罚符事件（与规则内正常流局可区分）。
+5. **细则 Rules**：`Kyoku.rules`（`src/core/rules.zig`）；产品 `default()`，差分 `riichienv()`；仅代码注入，局中只读。
 
 ## 模块与依赖
 

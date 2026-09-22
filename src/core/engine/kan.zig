@@ -20,8 +20,9 @@ pub const DoraReveal = enum {
 /// 杠后：按时机翻指示 / 岭上摸牌 / 进入 wait_act。
 pub fn resolveKan(ky: *Kyoku, actor: Seat, out: []Event, start: usize, dora: DoraReveal) []Event {
     var n = start;
-    // 连杠：先翻上次明杠未翻的指示（例：kakan → dora → tsumo）
-    n = flushMinkanDora(ky, out, n);
+    if (ky.rules.flush_pending_dora_on_renkan) {
+        n = flushMinkanDora(ky, out, n);
+    }
     switch (dora) {
         .immediate => n = appendRevealDora(ky, out, n),
         .after_discard => ky.pending_minkan_dora += 1,
@@ -68,11 +69,20 @@ fn appendRevealDora(ky: *Kyoku, out: []Event, start: usize) usize {
     return n;
 }
 
-/// 暗杠落地；国士可抢则开窗，否则立刻翻指示并岭上。
+fn doraRevealFromRules(timing: @import("../rules.zig").Rules.DoraTiming) DoraReveal {
+    return switch (timing) {
+        .immediate => .immediate,
+        .after_discard => .after_discard,
+    };
+}
+
+/// 暗杠落地；国士可抢则开窗，否则按规则翻指示并岭上。
 pub fn applyAnkan(ky: *Kyoku, seat: Seat, consumed: [4]Pai, out: []Event) ApplyError![]Event {
     if (ky.drawn == null) return error.IllegalAction;
     if (!ky.yama.hasLive()) return error.IllegalAction;
-    if (ky.players[seat].riichi and !legal.ankanPreservesWaits(ky, seat, consumed[0]))
+    if (ky.kan_count >= 4) return error.IllegalAction;
+    if (ky.players[seat].riichi and ky.rules.riichi_ankan_must_preserve_wait and
+        !legal.ankanPreservesWaits(ky, seat, consumed[0]))
         return error.IllegalAction;
     if (!seat_tiles.removeExactTiles(ky, seat, &consumed)) return error.IllegalAction;
     ky.drawn = null;
@@ -94,15 +104,16 @@ pub fn applyAnkan(ky: *Kyoku, seat: Seat, consumed: [4]Pai, out: []Event) ApplyE
 
     window.openChankan(ky, seat, consumed[0], true);
     if (!window.anyOpen(ky)) {
-        return resolveKan(ky, seat, out, n, .immediate);
+        return resolveKan(ky, seat, out, n, doraRevealFromRules(ky.rules.ankan_dora_timing));
     }
     return out[0..n];
 }
 
-/// 加杠：写事件；有抢则开窗，否则岭上（指示打牌后翻）。
+/// 加杠：写事件；有抢则开窗，否则岭上（指示按规则时机翻）。
 pub fn applyKakan(ky: *Kyoku, seat: Seat, pai: Pai, consumed: [3]Pai, out: []Event) ApplyError![]Event {
     if (ky.drawn == null) return error.IllegalAction;
     if (!ky.yama.hasLive()) return error.IllegalAction;
+    if (ky.kan_count >= 4) return error.IllegalAction;
     const hand_one = [_]Pai{pai};
     if (!seat_tiles.removeExactTiles(ky, seat, &hand_one)) return error.IllegalAction;
     if (!seat_tiles.upgradePonToKakan(ky, seat, pai, consumed)) return error.IllegalAction;
@@ -118,7 +129,7 @@ pub fn applyKakan(ky: *Kyoku, seat: Seat, pai: Pai, consumed: [3]Pai, out: []Eve
 
     window.openChankan(ky, seat, pai, false);
     if (!window.anyOpen(ky)) {
-        return resolveKan(ky, seat, out, n, .after_discard);
+        return resolveKan(ky, seat, out, n, doraRevealFromRules(ky.rules.minkan_dora_timing));
     }
     return out[0..n];
 }

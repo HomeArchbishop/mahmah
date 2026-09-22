@@ -55,7 +55,7 @@ fn settle(ky: *Kyoku, out: []Event) ApplyError![]Event {
         }
     }
 
-    if (ron_n >= 3) {
+    if (ron_n >= 3 and ky.rules.abort_sanchaho) {
         var n: usize = 0;
         out[n] = .{ .ryukyoku = .{ .reason = "sanchaho", .deltas = .{ 0, 0, 0, 0 } } };
         n += 1;
@@ -76,7 +76,11 @@ fn settle(ky: *Kyoku, out: []Event) ApplyError![]Event {
         window.clear(ky);
         ky.pending_kan = null;
         ky.pending_ankan = false;
-        return kan.resolveKan(ky, actor, out, 0, if (ankan) .immediate else .after_discard);
+        const timing = if (ankan) ky.rules.ankan_dora_timing else ky.rules.minkan_dora_timing;
+        return kan.resolveKan(ky, actor, out, 0, switch (timing) {
+            .immediate => .immediate,
+            .after_discard => .after_discard,
+        });
     }
 
     var call_seat: ?Seat = null;
@@ -161,6 +165,7 @@ fn applyCall(ky: *Kyoku, seat: Seat, action: Action, out: []Event) ApplyError![]
         },
         .daiminkan => |c| {
             if (!ky.yama.hasLive()) return error.IllegalAction;
+            if (ky.kan_count >= 4) return error.IllegalAction;
             if (!types.paiEql(c.pai, pai)) return error.IllegalAction;
             if (!seat_tiles.removeExactTiles(ky, seat, &c.consumed)) return error.IllegalAction;
             var f: kyoku_mod.Fuuro = .{ .kind = .daiminkan, .tile_len = 4, .from = target };
@@ -174,7 +179,10 @@ fn applyCall(ky: *Kyoku, seat: Seat, action: Action, out: []Event) ApplyError![]
             n += 1;
             window.clear(ky);
             ky.response_pai = null;
-            return kan.resolveKan(ky, seat, out, n, .after_discard);
+            return kan.resolveKan(ky, seat, out, n, switch (ky.rules.minkan_dora_timing) {
+                .immediate => .immediate,
+                .after_discard => .after_discard,
+            });
         },
         else => return error.IllegalAction,
     }

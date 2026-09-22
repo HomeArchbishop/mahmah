@@ -13,7 +13,6 @@ const Event = types.Event;
 const Seat = types.Seat;
 const Pai = types.Pai;
 const ApplyError = types.ApplyError;
-const CAPACITY = types.CAPACITY;
 
 /// 打牌入河；有应手则开窗，否则 acceptRiichi → abort → dealNext。
 pub fn resolveDiscard(ky: *Kyoku, seat: Seat, pai: Pai, tsumogiri: bool, out: []Event) ApplyError![]Event {
@@ -66,6 +65,7 @@ pub fn applyReach(ky: *Kyoku, seat: Seat, out: []Event) ApplyError![]Event {
     if (!ky.players[seat].isMenzen()) return error.IllegalAction;
     if (ky.scores[seat] < 1000) return error.IllegalAction;
     if (ky.drawn == null) return error.IllegalAction;
+    if (ky.yama.liveRemaining() < 4) return error.IllegalAction;
     ky.pending_riichi = seat;
     out[0] = .{ .reach = .{ .actor = seat } };
     return out[0..1];
@@ -74,8 +74,8 @@ pub fn applyReach(ky: *Kyoku, seat: Seat, out: []Event) ApplyError![]Event {
 pub fn afterNoClaim(ky: *Kyoku, out: []Event, start: usize) []Event {
     var n = start;
     n = acceptRiichi(ky, out, n);
-    if (checkTochuRyukyoku(ky)) {
-        out[n] = .{ .ryukyoku = .{ .reason = tochuRyukyokuReason(ky), .deltas = .{ 0, 0, 0, 0 } } };
+    if (ryuukyoku.isTochuAbortPending(ky)) {
+        out[n] = .{ .ryukyoku = .{ .reason = ryuukyoku.tochuAbortReason(ky), .deltas = .{ 0, 0, 0, 0 } } };
         n += 1;
         return round.afterKyokuEnd(ky, out, n);
     }
@@ -97,55 +97,6 @@ pub fn acceptRiichi(ky: *Kyoku, out: []Event, start: usize) usize {
     out[n] = .{ .reach_accepted = .{ .actor = seat } };
     n += 1;
     return n;
-}
-
-fn tochuRyukyokuReason(ky: *const Kyoku) []const u8 {
-    if (fourWinds(ky)) return "sufuurenta";
-    if (fourKans(ky)) return "suukansansen";
-    if (fourRiichi(ky)) return "suucha_riichi";
-    return "abort";
-}
-
-/// 四风连打 / 四杠散了 / 四立直（途中流局）。
-fn checkTochuRyukyoku(ky: *const Kyoku) bool {
-    return fourWinds(ky) or fourKans(ky) or fourRiichi(ky);
-}
-
-fn fourWinds(ky: *const Kyoku) bool {
-    const d0 = ky.first_discards[0] orelse return false;
-    if (!@import("pai.zig").isKazehai(d0)) return false;
-    var s: u8 = 1;
-    while (s < CAPACITY) : (s += 1) {
-        const d = ky.first_discards[s] orelse return false;
-        if (!types.paiEql(d, d0)) return false;
-    }
-    return true;
-}
-
-fn fourKans(ky: *const Kyoku) bool {
-    if (ky.kan_count < 4) return false;
-    var owners: [CAPACITY]u8 = .{0} ** CAPACITY;
-    for (ky.players, 0..) |p, si| {
-        var i: u8 = 0;
-        while (i < p.fuuro_len) : (i += 1) {
-            switch (p.fuuro[i].kind) {
-                .daiminkan, .ankan, .kakan => owners[si] += 1,
-                else => {},
-            }
-        }
-    }
-    var players_with_kan: u8 = 0;
-    for (owners) |o| {
-        if (o > 0) players_with_kan += 1;
-    }
-    return players_with_kan >= 2 and ky.kan_count >= 4;
-}
-
-fn fourRiichi(ky: *const Kyoku) bool {
-    for (ky.players) |p| {
-        if (!p.riichi) return false;
-    }
-    return true;
 }
 
 fn dealNext(ky: *Kyoku, out: []Event, start: usize) []Event {

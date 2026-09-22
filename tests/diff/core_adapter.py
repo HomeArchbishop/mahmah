@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
+from typing import Any
 
 
 def default_mjai_diff_path() -> Path:
@@ -25,6 +26,8 @@ class CoreEngine:
             stderr=subprocess.PIPE,
             bufsize=0,
         )
+        # seat -> compact legal key strings（start/act/acts 回包）
+        self._legal_keys: dict[int, list[str]] = {}
 
     def close(self) -> None:
         if self.proc.poll() is None:
@@ -48,6 +51,8 @@ class CoreEngine:
         reply = json.loads(line.decode("utf-8"))
         if not reply.get("ok", False):
             raise RuntimeError(f"mjai_diff error: {reply}")
+        if "legal_keys" in reply:
+            self._legal_keys = {int(k): list(v) for k, v in reply["legal_keys"].items()}
         return reply
 
     def load_wall(
@@ -82,5 +87,46 @@ class CoreEngine:
             act.setdefault("tsumogiri", False)
         return self._rpc({"op": "act", "seat": seat, "action": act})["events"]
 
-    def legal(self, seat: int) -> list[dict]:
-        return self._rpc({"op": "legal", "seat": seat}).get("actions", [])
+    def apply_many(self, actions: dict[int, dict]) -> list[dict]:
+        """多座位一次提交（应手窗）；回包含下一步 legals。"""
+        payload = []
+        for seat in sorted(actions.keys()):
+            act = dict(actions[seat])
+            act.setdefault("request_id", 1)
+            act.setdefault("actor", seat)
+            if act.get("type") == "dahai":
+                act.setdefault("tsumogiri", False)
+            payload.append({"seat": seat, "action": act})
+        return self._rpc({"op": "acts", "actions": payload})["events"]
+
+    def replay_kyoku(
+        self,
+        paishan_mjai: list[str],
+        *,
+        oya: int,
+        bakaze: str,
+        kyoku: int,
+        honba: int,
+        kyotaku: int,
+        scores: list[int],
+        steps: list[list[dict]],
+    ) -> tuple[list[dict], list[dict[int, list[str]]]]:
+        """整局回放。steps[i] = [{\"seat\", \"action\"}, ...]。"""
+        reply = self._rpc(
+            {
+                "op": "replay_kyoku",
+                "paishan": paishan_mjai,
+                "oya": oya,
+                "bakaze": bakaze,
+                "kyoku": kyoku,
+                "honba": honba,
+                "kyotaku": kyotaku,
+                "scores": scores,
+                "steps": steps,
+            }
+        )
+        raw_keys = reply.get("step_legal_keys") or []
+        step_keys: list[dict[int, list[str]]] = []
+        for m in raw_keys:
+            step_keys.append({int(k): list(v) for k, v in m.items()})
+        return reply["events"], step_keys

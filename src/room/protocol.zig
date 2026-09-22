@@ -81,7 +81,7 @@ pub fn encodeEventForSeat(event: Event, viewer: ?Seat, buf: []u8) ![]const u8 {
         .start_game => try append(buf, &pos, "{\"type\":\"start_game\"}"),
         .start_kyoku => |k| {
             // wire：开局 dora_marker 为单张；scores 与场况一并给出
-            const dm = if (k.dora_markers.len > 0) k.dora_markers[0] else "?";
+            const dm = if (k.dora_markers_len > 0) k.dora_markers[0] else "?";
             try appendFmt(buf, &pos, "{{\"type\":\"start_kyoku\",\"bakaze\":\"{s}\",\"dora_marker\":\"{s}\",\"kyoku\":{d},\"honba\":{d},\"kyotaku\":{d},\"oya\":{d},\"scores\":[{d},{d},{d},{d}],\"tehais\":", .{
                 k.bakaze,
                 dm,

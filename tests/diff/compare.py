@@ -70,12 +70,39 @@ def action_key(action: dict[str, Any]) -> tuple:
     return (t, tuple(sorted(rest.items())))
 
 
+def action_key_str(action: dict[str, Any]) -> str:
+    """与 mjai_diff legal_keys 同构的短串。"""
+    k = action_key(action)
+    t = k[0]
+    if t == "dahai":
+        return f"dahai:{k[1]}:{1 if k[2] else 0}"
+    if t in ("chi", "pon", "daiminkan", "kakan"):
+        cons = "+".join(k[2])
+        return f"{t}:{k[1]}:{cons}"
+    if t == "ankan":
+        return "ankan:" + "+".join(k[1])
+    return str(t)
+
+
 def legal_sets_equal(
     oracle: list[dict[str, Any]],
     under_test: list[dict[str, Any]],
 ) -> tuple[bool, str]:
     a = {action_key(x) for x in oracle}
     b = {action_key(x) for x in under_test}
+    if a == b:
+        return True, ""
+    only_o = sorted(a - b)
+    only_c = sorted(b - a)
+    return False, f"only_oracle={only_o!r} only_core={only_c!r}"
+
+
+def legal_key_sets_equal(
+    oracle: list[dict[str, Any]],
+    core_keys: list[str],
+) -> tuple[bool, str]:
+    a = {action_key_str(x) for x in oracle}
+    b = set(core_keys)
     if a == b:
         return True, ""
     only_o = sorted(a - b)

@@ -1,4 +1,5 @@
 const types = @import("types.zig");
+const rules_mod = @import("rules.zig");
 const Pai = types.Pai;
 const CAPACITY = types.CAPACITY;
 const TEHAI_LEN = types.TEHAI_LEN;
@@ -38,6 +39,11 @@ pub const Yama = struct {
     /// 活山是否还有牌可摸（空则河海底，不可杠）。
     pub fn hasLive(self: *const Yama) bool {
         return self.live_i < self.live_end;
+    }
+
+    /// 活山剩余可摸张数。
+    pub fn liveRemaining(self: *const Yama) u8 {
+        return self.live_end - self.live_i;
     }
 };
 
@@ -93,6 +99,9 @@ pub const Player = struct {
 /// 一局牌桌真相（仅 core 内部；由 engine 读写）。
 pub const Kyoku = struct {
     phase: Phase = .idle,
+
+    /// 细则（开局写入，局中只读）
+    rules: rules_mod.Rules = .{},
 
     /// 摸打指针；wait_response 时仍为切牌（或加杠）者
     turn: types.Seat = 0,

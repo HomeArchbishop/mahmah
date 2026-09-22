@@ -94,6 +94,7 @@ test {
     _ = @import("referee/root.zig");
     _ = @import("ryuukyoku.zig");
     _ = @import("kuikae.zig");
+    _ = @import("../rules.zig");
 }
 
 test "onStartGame deals 13 and draws for oya" {

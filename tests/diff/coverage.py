@@ -1,13 +1,14 @@
-"""覆盖 checklist：从 MJAI 事件打标签，合并进 checklist.yaml。
+"""覆盖报告：checklist 是条目目录；每次 diff 跑完写最新报告。
 
-人工维护条目（id/group/desc）；本模块只往 seeds 追加。
-不依赖 core / 差分结果——默认可只跑 oracle 扫描。
+- `checklist.yaml`：人工维护 id/group/desc（役种可由 YAKU_CATALOG 补齐）
+- `coverage-latest.md`：本次 diff 覆盖了什么、哪个 seed（每次覆盖写）
 """
 from __future__ import annotations
 
 import argparse
 import sys
 from collections import defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -15,17 +16,10 @@ import yaml
 
 from riichienv import ActionType
 
-from .leader import (
-    Table,
-    apply_score_events,
-    filter_game_events,
-    meta_from_start_kyoku,
-    should_end_hanchan,
-)
 from .riichi_adapter import RiichiEngine, make_wall
 
 CHECKLIST_PATH = Path(__file__).with_name("checklist.yaml")
-MAX_EXAMPLE_SEEDS = 8
+LATEST_PATH = Path(__file__).with_name("coverage-latest.md")
 
 # 覆盖扫描：优先打出九种九牌，便于扫到途中流局。
 _COVER_PRIORITY = {
@@ -129,30 +123,19 @@ def tags_from_yaku_ids(yaku_ids: Iterable[int]) -> set[str]:
 
 
 def save_checklist(data: dict[str, Any], path: Path = CHECKLIST_PATH) -> None:
-    # 稳定键序：手工可读；seeds 只保留样例，count 记总量
+    """只写目录条目（id/group/desc），不存 count/seeds。"""
     lines = [
-        "# Diff 覆盖 checklist。",
-        "# 人工维护：id / group / desc（新增条目只改本文件）。",
-        "# 程序维护：count + seeds（seeds 为样例，最多 "
-        f"{MAX_EXAMPLE_SEEDS} 个；只追加不删）。",
+        "# Diff 覆盖条目目录。",
+        "# 人工维护：id / group / desc。",
+        "# 役种缺项可由 `python -m diff coverage ensure` 从 YAKU_CATALOG 补齐。",
+        "# 每次 diff 的命中报告见 coverage-latest.md（单次最新，不累积）。",
         f"version: {int(data.get('version', 1))}",
         "items:",
     ]
     for it in data["items"]:
-        seeds = sorted({int(s) for s in (it.get("seeds") or [])})[:MAX_EXAMPLE_SEEDS]
-        count = int(it.get("count") or len(seeds))
-        if count < len(seeds):
-            count = len(seeds)
-        it["seeds"] = seeds
-        it["count"] = count
         lines.append(f"  - id: {it['id']}")
         lines.append(f"    group: {it['group']}")
         lines.append(f"    desc: {it['desc']}")
-        lines.append(f"    count: {count}")
-        if seeds:
-            lines.append(f"    seeds: [{', '.join(str(s) for s in seeds)}]")
-        else:
-            lines.append("    seeds: []")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -247,7 +230,7 @@ def tags_from_events(events: Iterable[dict[str, Any]]) -> set[str]:
     return tags
 
 
-def _renchan_after(table: Table, events: list[dict[str, Any]]) -> bool:
+def _renchan_after(table, events: list[dict[str, Any]]) -> bool:
     """局终是否连庄（覆盖扫描用启发式，与裁判细则可略有出入）。"""
     hora = next((e for e in events if e.get("type") == "hora"), None)
     if hora is not None:
@@ -259,11 +242,12 @@ def _renchan_after(table: Table, events: list[dict[str, Any]]) -> bool:
     if reason == "exhaustive_draw":
         deltas = ryu.get("deltas") or [0, 0, 0, 0]
         return int(deltas[table.oya]) >= 0
-    # 途中流局一般连庄
     return True
 
 
-def _advance_table(table: Table, *, renchan: bool) -> Table | None:
+def _advance_table(table, *, renchan: bool):
+    from .leader import Table, should_end_hanchan
+
     if should_end_hanchan(table, renchan=renchan):
         return None
     if renchan:
@@ -294,9 +278,16 @@ def _advance_table(table: Table, *, renchan: bool) -> Table | None:
 
 
 def collect_seed_tags(seed: int) -> set[str]:
-    """跑 oracle 半庄，返回事件标签 + 役种标签。"""
+    """跑 oracle 半庄，返回事件标签 + 役种标签（不差分，供 scan）。"""
+    from .leader import (
+        Table,
+        apply_score_events,
+        filter_game_events,
+        meta_from_start_kyoku,
+    )
+
     oracle = RiichiEngine()
-    table: Table | None = Table()
+    table = Table()
     kyoku_i = 0
     all_ev: list[dict[str, Any]] = []
     yaku_tags: set[str] = set()
@@ -336,7 +327,6 @@ def collect_seed_tags(seed: int) -> set[str]:
                 for wr in oracle.env.win_results.values():
                     yaku_tags |= tags_from_yaku_ids(wr.yaku)
 
-            # riichienv 为单局模式，常带 end_game；覆盖扫描忽略之，按半庄本地推进。
             if any(e.get("type") == "end_kyoku" for e in o_new):
                 renchan = _renchan_after(table, kyoku_events)
                 table = _advance_table(table, renchan=renchan)
@@ -349,119 +339,82 @@ def collect_seed_tags(seed: int) -> set[str]:
     return tags_from_events(all_ev) | yaku_tags
 
 
-def collect_seed_events(seed: int) -> list[dict[str, Any]]:
-    """兼容：只收集事件（不含役种）。"""
-    oracle = RiichiEngine()
-    table: Table | None = Table()
-    kyoku_i = 0
-    all_ev: list[dict[str, Any]] = []
-
-    while table is not None:
-        wall = make_wall(seed * 10007 + kyoku_i)
-        o_ev = filter_game_events(
-            oracle.load_wall(
-                wall,
-                oya=table.oya,
-                honba=table.honba,
-                kyotaku=table.kyotaku,
-                scores=table.scores,
-                bakaze=table.bakaze,
-            )
-        )
-        while o_ev and o_ev[0].get("type") == "start_game":
-            o_ev = o_ev[1:]
-        sk = next(e for e in o_ev if e.get("type") == "start_kyoku")
-        table = meta_from_start_kyoku(sk, table.scores)
-        all_ev.extend(o_ev)
-
-        kyoku_events: list[dict[str, Any]] = list(o_ev)
-        while not oracle.done():
-            seats = oracle.seats_needing_action()
-            if not seats:
-                break
-            actions = {
-                seat: oracle.pick_action(seat, priority=_COVER_PRIORITY) for seat in seats
-            }
-            o_new = filter_game_events(oracle.step(actions))
-            all_ev.extend(o_new)
-            kyoku_events.extend(o_new)
-            apply_score_events(table, o_new)
-            if any(e.get("type") == "end_kyoku" for e in o_new):
-                renchan = _renchan_after(table, kyoku_events)
-                table = _advance_table(table, renchan=renchan)
-                break
-        kyoku_i += 1
-        if kyoku_i > 16:
-            break
-    return all_ev
-
-
-def merge_seeds(
-    data: dict[str, Any],
+def report_from_run(
     seed_tags: dict[int, set[str]],
+    catalog: dict[str, Any],
     *,
-    max_examples: int = MAX_EXAMPLE_SEEDS,
-    replace: bool = False,
-) -> int:
-    """把 seed→tags 写入 checklist。
-
-    replace=False：并入已有 seeds/count（count 按「已知样例 ∪ 本次」低估亦可接受）。
-    replace=True：用本次扫描结果覆盖 count 与 seeds 样例。
-    """
-    known = known_ids(data)
-    hits: dict[str, set[int]] = {i: set() for i in known}
-    for seed, tags in seed_tags.items():
-        for tag in tags:
+    base_seed: int,
+    n_seeds: int,
+    failed: int = 0,
+    max_seeds: int = 16,
+) -> str:
+    """根据本次 diff 的 seed→tags 生成报告（相对 checklist 目录）。"""
+    hits: dict[str, list[int]] = {it["id"]: [] for it in catalog["items"]}
+    for seed in sorted(seed_tags):
+        for tag in seed_tags[seed]:
             if tag in hits:
-                hits[tag].add(seed)
+                hits[tag].append(seed)
 
-    added = 0
-    for it in data["items"]:
-        tag = it["id"]
-        new = hits[tag]
-        if replace:
-            old_examples = set()
-            prev_count = 0
-        else:
-            old_examples = {int(s) for s in (it.get("seeds") or [])}
-            prev_count = int(it.get("count") or len(old_examples))
-        fresh = new - old_examples
-        added += len(fresh)
-        union = old_examples | new
-        it["seeds"] = sorted(union)[:max_examples]
-        # replace：count=本次命中数；merge：count 单调增加（至少覆盖 union）
-        it["count"] = len(new) if replace else max(prev_count + len(fresh), len(union))
-    return added
-
-
-def format_report(data: dict[str, Any], *, max_seeds: int = 12) -> str:
     groups: dict[str, list[dict]] = defaultdict(list)
-    for it in data["items"]:
+    for it in catalog["items"]:
         groups[it["group"]].append(it)
 
-    lines = ["# Diff coverage checklist", ""]
-    covered = sum(1 for it in data["items"] if int(it.get("count") or 0) > 0)
-    total = len(data["items"])
-    lines.append(f"covered {covered}/{total}")
-    lines.append("")
+    covered = sum(1 for sid, seeds in hits.items() if seeds)
+    total = len(catalog["items"])
+    ok = n_seeds - failed
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
+    lines = [
+        "# Diff coverage（本次）",
+        "",
+        f"- time: {now}",
+        f"- seeds: base={base_seed} n={n_seeds} ok={ok} fail={failed}",
+        f"- covered: {covered}/{total}",
+        "",
+    ]
     for group, items in groups.items():
         lines.append(f"## {group}")
         for it in items:
-            seeds = it.get("seeds") or []
-            count = int(it.get("count") or len(seeds))
-            mark = "x" if count else " "
-            shown = ", ".join(str(s) for s in seeds[:max_seeds])
-            if count and seeds:
-                extra = f" (n={count})" if count > len(seeds) else f" (n={count})"
-                seed_part = f" → {shown}{extra}"
-            elif count:
-                seed_part = f" → (n={count})"
+            seeds = hits[it["id"]]
+            mark = "x" if seeds else " "
+            if seeds:
+                shown = ", ".join(str(s) for s in seeds[:max_seeds])
+                more = f" … +{len(seeds) - max_seeds}" if len(seeds) > max_seeds else ""
+                seed_part = f" → seed {shown}{more} (n={len(seeds)})"
             else:
-                seed_part = " _(none)_"
+                seed_part = ""
             lines.append(f"- [{mark}] `{it['id']}` {it['desc']}{seed_part}")
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
+
+
+def write_latest_report(
+    seed_tags: dict[int, set[str]],
+    *,
+    base_seed: int,
+    n_seeds: int,
+    failed: int = 0,
+    catalog_path: Path = CHECKLIST_PATH,
+    out_path: Path = LATEST_PATH,
+) -> Path:
+    catalog = load_checklist(catalog_path)
+    text = report_from_run(
+        seed_tags,
+        catalog,
+        base_seed=base_seed,
+        n_seeds=n_seeds,
+        failed=failed,
+    )
+    out_path.write_text(text, encoding="utf-8")
+    sys.stdout.write(text)
+    return out_path
+
+
+def format_report(data: dict[str, Any], *, max_seeds: int = 12) -> str:
+    """打印上次 diff 的 coverage-latest.md。"""
+    if LATEST_PATH.is_file():
+        return LATEST_PATH.read_text(encoding="utf-8")
+    return report_from_run({}, data, base_seed=0, n_seeds=0, max_seeds=max_seeds)
 
 
 def scan_seeds(base: int, n: int) -> dict[int, set[str]]:
@@ -473,21 +426,19 @@ def scan_seeds(base: int, n: int) -> dict[int, set[str]]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(description="Diff coverage checklist")
+    p = argparse.ArgumentParser(description="Diff coverage")
     p.add_argument("--checklist", type=Path, default=CHECKLIST_PATH)
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    scan_p = sub.add_parser("scan", help="跑 oracle 半庄，把命中 seed 写入 checklist")
+    sub.add_parser("report", help="打印 coverage-latest.md（上次 diff）")
+    sub.add_parser("ensure", help="把缺的役种条目写入 checklist.yaml")
+
+    scan_p = sub.add_parser(
+        "scan",
+        help="只跑 oracle 扫覆盖（不差分）；写 coverage-latest.md",
+    )
     scan_p.add_argument("--seeds", type=int, default=50)
     scan_p.add_argument("--base-seed", type=int, default=0)
-    scan_p.add_argument(
-        "--replace",
-        action="store_true",
-        help="用本次扫描覆盖 count/seeds（默认并入）",
-    )
-    scan_p.add_argument("--dry-run", action="store_true")
-
-    sub.add_parser("report", help="打印覆盖报告")
 
     args = p.parse_args(argv)
     data = load_checklist(args.checklist)
@@ -496,20 +447,21 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.write(format_report(data))
         return 0
 
+    if args.cmd == "ensure":
+        n = ensure_yaku_items(data)
+        save_checklist(data, args.checklist)
+        print(f"ensure: added {n} yaku items → {args.checklist}")
+        return 0
+
     if args.cmd == "scan":
         seed_tags = scan_seeds(args.base_seed, args.seeds)
-        added = merge_seeds(data, seed_tags, replace=args.replace)
-        if not args.dry_run:
-            save_checklist(data, args.checklist)
-        hit = sum(1 for tags in seed_tags.values() if tags)
-        print(
-            f"scanned seeds={args.seeds} base={args.base_seed} "
-            f"with_tags={hit} new_links={added}"
-            + (" replace" if args.replace else "")
-            + (" (dry-run)" if args.dry_run else ""),
-            flush=True,
+        path = write_latest_report(
+            seed_tags,
+            base_seed=args.base_seed,
+            n_seeds=args.seeds,
+            catalog_path=args.checklist,
         )
-        sys.stdout.write(format_report(data))
+        print(f"scan coverage → {path}", flush=True)
         return 0
 
     return 2

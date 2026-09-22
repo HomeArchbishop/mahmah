@@ -53,7 +53,7 @@ pub fn chomboDeltas(offender: Seat, oya: Seat) [CAPACITY]i32 {
 }
 
 /// 基本点。不满贯返回未整百的 raw（支付时再进位）；满贯以上为表定值。
-pub fn basicPoints(han: u8, fu: u16, yakuman: u8) u32 {
+pub fn basicPoints(han: u8, fu: u16, yakuman: u8, kiriage_mangan: bool) u32 {
     if (yakuman > 0) return 8000 * @as(u32, yakuman);
     if (han >= 13) return 8000;
     if (han >= 11) return 6000;
@@ -63,7 +63,7 @@ pub fn basicPoints(han: u8, fu: u16, yakuman: u8) u32 {
     if (han == 0 or fu == 0) return 0;
 
     // 切上满贯：4 翻 30 符、3 翻 60 符
-    if ((han >= 4 and fu >= 30) or (han == 3 and fu >= 60)) return 2000;
+    if (kiriage_mangan and ((han >= 4 and fu >= 30) or (han == 3 and fu >= 60))) return 2000;
 
     const shift: u5 = @intCast(@min(han + 2, 31));
     const raw: u32 = @as(u32, fu) * (@as(u32, 1) << shift);
@@ -80,9 +80,10 @@ pub fn horaDeltas(
     honba: u8,
     kyotaku: u8,
     tsumo: bool,
+    kiriage_mangan: bool,
 ) [CAPACITY]i32 {
     var d: [CAPACITY]i32 = .{ 0, 0, 0, 0 };
-    const bp = basicPoints(value.han, value.fu, value.yakuman);
+    const bp = basicPoints(value.han, value.fu, value.yakuman, kiriage_mangan);
     if (bp == 0) return d;
 
     const honba_all: i32 = 300 * @as(i32, honba);
@@ -126,49 +127,53 @@ fn ceil100(x: u32) u32 {
 }
 
 test "basicPoints 1han 30fu raw" {
-    try std.testing.expectEqual(@as(u32, 240), basicPoints(1, 30, 0));
+    try std.testing.expectEqual(@as(u32, 240), basicPoints(1, 30, 0, true));
 }
 
 test "basicPoints kiriage mangan 4han 30fu" {
-    try std.testing.expectEqual(@as(u32, 2000), basicPoints(4, 30, 0));
+    try std.testing.expectEqual(@as(u32, 2000), basicPoints(4, 30, 0, true));
+    try std.testing.expectEqual(@as(u32, 1920), basicPoints(4, 30, 0, false));
 }
 
 test "basicPoints kiriage mangan 3han 60fu" {
-    try std.testing.expectEqual(@as(u32, 2000), basicPoints(3, 60, 0));
+    try std.testing.expectEqual(@as(u32, 2000), basicPoints(3, 60, 0, true));
+    try std.testing.expectEqual(@as(u32, 1920), basicPoints(3, 60, 0, false));
 }
 
 test "horaDeltas child ron 1han 30fu" {
     const v: HoraValue = .{ .han = 1, .fu = 30 };
-    const d = horaDeltas(1, 0, 0, v, 0, 0, false);
+    const d = horaDeltas(1, 0, 0, v, 0, 0, false, true);
     try std.testing.expectEqual(@as(i32, -1000), d[0]);
     try std.testing.expectEqual(@as(i32, 1000), d[1]);
 }
 
 test "horaDeltas child ron 1han 30fu 1honba" {
     const v: HoraValue = .{ .han = 1, .fu = 30 };
-    const d = horaDeltas(1, 0, 0, v, 1, 0, false);
+    const d = horaDeltas(1, 0, 0, v, 1, 0, false, true);
     try std.testing.expectEqual(@as(i32, -1300), d[0]);
     try std.testing.expectEqual(@as(i32, 1300), d[1]);
 }
 
 test "horaDeltas dealer ron 1han 30fu" {
     const v: HoraValue = .{ .han = 1, .fu = 30 };
-    const d = horaDeltas(0, 1, 0, v, 0, 0, false);
+    const d = horaDeltas(0, 1, 0, v, 0, 0, false, true);
     try std.testing.expectEqual(@as(i32, 1500), d[0]);
     try std.testing.expectEqual(@as(i32, -1500), d[1]);
 }
 
 test "horaDeltas dealer ron 4han 30fu 2honba kiriage" {
-    // 切上满贯 12000 + 600 = 12600
     const v: HoraValue = .{ .han = 4, .fu = 30 };
-    const d = horaDeltas(2, 3, 2, v, 2, 0, false);
-    try std.testing.expectEqual(@as(i32, 12600), d[2]);
-    try std.testing.expectEqual(@as(i32, -12600), d[3]);
+    const d_on = horaDeltas(2, 3, 2, v, 2, 0, false, true);
+    try std.testing.expectEqual(@as(i32, 12600), d_on[2]);
+    try std.testing.expectEqual(@as(i32, -12600), d_on[3]);
+    const d_off = horaDeltas(2, 3, 2, v, 2, 0, false, false);
+    try std.testing.expectEqual(@as(i32, 12200), d_off[2]);
+    try std.testing.expectEqual(@as(i32, -12200), d_off[3]);
 }
 
 test "horaDeltas child tsumo 1han 30fu" {
     const v: HoraValue = .{ .han = 1, .fu = 30 };
-    const d = horaDeltas(1, 1, 0, v, 0, 0, true);
+    const d = horaDeltas(1, 1, 0, v, 0, 0, true, true);
     try std.testing.expectEqual(@as(i32, -500), d[0]);
     try std.testing.expectEqual(@as(i32, 1100), d[1]);
     try std.testing.expectEqual(@as(i32, -300), d[2]);
@@ -177,14 +182,14 @@ test "horaDeltas child tsumo 1han 30fu" {
 
 test "horaDeltas mangan child ron" {
     const v: HoraValue = .{ .han = 5, .fu = 30 };
-    const d = horaDeltas(1, 0, 0, v, 0, 0, false);
+    const d = horaDeltas(1, 0, 0, v, 0, 0, false, true);
     try std.testing.expectEqual(@as(i32, -8000), d[0]);
     try std.testing.expectEqual(@as(i32, 8000), d[1]);
 }
 
 test "horaDeltas yakuman child ron" {
     const v: HoraValue = .{ .yakuman = 1 };
-    const d = horaDeltas(1, 0, 0, v, 0, 0, false);
+    const d = horaDeltas(1, 0, 0, v, 0, 0, false, true);
     try std.testing.expectEqual(@as(i32, -32000), d[0]);
     try std.testing.expectEqual(@as(i32, 32000), d[1]);
 }

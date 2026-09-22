@@ -60,8 +60,8 @@ pub fn fillUraMarkers(ky: *const Kyoku, buf: *[DORA_MARKER_CAP]Pai) []const Pai 
     return buf[0..n];
 }
 
-/// 按标准牌组填满 136 张牌山（含赤宝与字牌）。
-fn fill(yama: *Yama) void {
+/// 按标准牌组填满 136 张牌山（可选赤宝与字牌）。
+fn fill(yama: *Yama, aka: bool) void {
     const suits = [_]u8{ 'm', 'p', 's' };
     var i: usize = 0;
     for (suits) |suit| {
@@ -69,7 +69,7 @@ fn fill(yama: *Yama) void {
         while (rank <= 9) : (rank += 1) {
             var copy: u8 = 0;
             while (copy < 4) : (copy += 1) {
-                if (rank == 5 and copy == 0) {
+                if (aka and rank == 5 and copy == 0) {
                     yama.tiles[i] = switch (suit) {
                         'm' => "5mr",
                         'p' => "5pr",
@@ -147,7 +147,7 @@ fn shuffle(yama: *Yama, seed: u64) void {
 
 /// 开局：填山、洗牌、重置游标。
 pub fn prepare(ky: *Kyoku) void {
-    fill(&ky.yama);
+    fill(&ky.yama, ky.rules.aka);
     shuffle(&ky.yama, ky.shuffle_seed);
     ky.yama.resetCursors();
 }

@@ -85,8 +85,9 @@ pub const Event = union(enum) {
 
     start_kyoku: struct {
         bakaze: Kaze,
-        /// 开局表宝指示（wire 为单张字符串）
-        dora_markers: []const Pai,
+        /// 开局表宝指示（自持副本；wire 为单张字符串）
+        dora_markers: [DORA_MARKER_CAP]Pai = undefined,
+        dora_markers_len: u8 = 0,
         kyoku: u8,
         honba: u8,
         kyotaku: u8,

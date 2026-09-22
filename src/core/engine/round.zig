@@ -45,9 +45,13 @@ fn finishDeal(ky: *Kyoku, out: []Event) []Event {
     ky.drawn = first;
 
     var n: usize = 0;
+    const markers = ky.doraMarkersSlice();
+    var dora_owned: [types.DORA_MARKER_CAP]types.Pai = undefined;
+    @memcpy(dora_owned[0..markers.len], markers);
     out[n] = .{ .start_kyoku = .{
         .bakaze = ky.bakaze,
-        .dora_markers = ky.doraMarkersSlice(),
+        .dora_markers = dora_owned,
+        .dora_markers_len = @intCast(markers.len),
         .kyoku = ky.kyoku,
         .honba = ky.honba,
         .kyotaku = ky.kyotaku,

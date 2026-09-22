@@ -39,7 +39,8 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/mjai_diff.zig"),
             .target = target,
-            .optimize = optimize,
+            // 差分 harness：ReleaseFast（整局 replay 路径对 Debug 过慢）
+            .optimize = .ReleaseFast,
         }),
     });
     b.installArtifact(mjai_diff);

@@ -124,7 +124,7 @@ fn yakuChiitoi(ky: *const Kyoku, seat: Seat, tsumo: bool) YakuCount {
     if (menzenchintsumohou(ky, seat, tsumo, empty)) |y| total.han += y.han;
 
     if (danyaoTiles(closed)) |y| {
-        total.han += y.han;
+        if (ky.rules.kuitan or ky.players[seat].isMenzen()) total.han += y.han;
     } else if (honroutooTiles(closed)) |y| {
         total.han += y.han;
     }
@@ -140,11 +140,13 @@ fn yakuChiitoi(ky: *const Kyoku, seat: Seat, tsumo: bool) YakuCount {
     if (chankan(ky, seat, tsumo, empty)) |y| total.han += y.han;
 
     if (doraHanTiles(closed, ky.doraMarkersSlice())) |y| total.han += y.han;
-    if (ky.players[seat].riichi) {
+    if (ky.rules.ura and ky.players[seat].riichi) {
         var ura_buf: [kyoku_mod.DORA_MARKER_CAP]types.Pai = undefined;
         if (doraHanTiles(closed, wall.fillUraMarkers(ky, &ura_buf))) |y| total.han += y.han;
     }
-    if (akadoraTiles(closed)) |y| total.han += y.han;
+    if (ky.rules.aka) {
+        if (akadoraTiles(closed)) |y| total.han += y.han;
+    }
 
     return total;
 }
@@ -159,10 +161,10 @@ fn yakuKokushi(ky: *const Kyoku, seat: Seat, tsumo: bool) YakuCount {
     return y;
 }
 
-/// 国士十三面（juusanmen，双倍役满）。可与天和/地和再复合。
+/// 国士十三面（juusanmen）。倍数额 `rules.kokushi_13_double`；可与天和/地和再复合。
 fn yakuKokushiJuusanmen(ky: *const Kyoku, seat: Seat, tsumo: bool) YakuCount {
     const empty: Decomp = .{};
-    var y: YakuCount = .{ .yakuman = 2 };
+    var y: YakuCount = .{ .yakuman = if (ky.rules.kokushi_13_double) 2 else 1 };
     if (tenhou(ky, seat, tsumo, empty) != null or chiihou(ky, seat, tsumo, empty) != null) {
         y.yakuman += 1;
     }
@@ -203,6 +205,7 @@ fn riichi(ky: *const Kyoku, seat: Seat, tsumo: bool, decomp: Decomp) ?YakuCount 
 fn ippatsu(ky: *const Kyoku, seat: Seat, tsumo: bool, decomp: Decomp) ?YakuCount {
     _ = tsumo;
     _ = decomp;
+    if (!ky.rules.ippatsu) return null;
     if (!(ky.players[seat].isMenzen() and ky.players[seat].ippatsu)) return null;
     return .{ .han = 1 };
 }
@@ -214,9 +217,8 @@ fn menzenchintsumohou(ky: *const Kyoku, seat: Seat, tsumo: bool, decomp: Decomp)
 }
 
 fn danyao(ky: *const Kyoku, seat: Seat, tsumo: bool, decomp: Decomp) ?YakuCount {
-    _ = ky;
-    _ = seat;
     _ = tsumo;
+    if (!ky.rules.kuitan and !ky.players[seat].isMenzen()) return null;
     for (decomp.blocks) |b| {
         for (0..b.tile_len) |i| {
             if (pai_util.isYaochuuhai(b.tiles[i])) return null;
@@ -331,15 +333,16 @@ fn dora(ky: *const Kyoku, seat: Seat, tsumo: bool, decomp: Decomp) ?YakuCount {
 
 fn uradora(ky: *const Kyoku, seat: Seat, tsumo: bool, decomp: Decomp) ?YakuCount {
     _ = tsumo;
+    if (!ky.rules.ura) return null;
     if (!ky.players[seat].riichi) return null;
     var ura_buf: [kyoku_mod.DORA_MARKER_CAP]types.Pai = undefined;
     return doraHan(decomp, wall.fillUraMarkers(ky, &ura_buf));
 }
 
 fn akadora(ky: *const Kyoku, seat: Seat, tsumo: bool, decomp: Decomp) ?YakuCount {
-    _ = ky;
     _ = seat;
     _ = tsumo;
+    if (!ky.rules.aka) return null;
     var n: u8 = 0;
     for (decomp.blocks) |b| {
         for (0..b.tile_len) |i| {
@@ -572,7 +575,7 @@ fn suuankoo(ky: *const Kyoku, seat: Seat, tsumo: bool, decomp: Decomp) ?YakuCoun
     _ = seat;
     _ = tsumo;
     if (ankouCount(decomp) != 4) return null;
-    // 单骑由 suuankootanki 计双倍
+    // 单骑由 suuankootanki 计（单/双倍见 rules.suuankou_tanki_double）
     if (decomp.blocks[0].winning != null) return null;
     return .{ .yakuman = 1 };
 }
@@ -635,7 +638,7 @@ fn chinroutou(ky: *const Kyoku, seat: Seat, tsumo: bool, decomp: Decomp) ?YakuCo
 fn chuurenpoutou(ky: *const Kyoku, seat: Seat, tsumo: bool, decomp: Decomp) ?YakuCount {
     _ = tsumo;
     if (!ky.players[seat].isMenzen()) return null;
-    // 纯正由 junseichuurenpoutou 计双倍
+    // 纯正由 junseichuurenpoutou 计（单/双倍见 rules.junsei_chuuren_double）
     if (chuurenKind(decomp) != false) return null;
     return .{ .yakuman = 1 };
 }
@@ -669,7 +672,6 @@ fn chiihou(ky: *const Kyoku, seat: Seat, tsumo: bool, decomp: Decomp) ?YakuCount
 }
 
 fn daisuushii(ky: *const Kyoku, seat: Seat, tsumo: bool, decomp: Decomp) ?YakuCount {
-    _ = ky;
     _ = seat;
     _ = tsumo;
     var kaze_kotsu: u8 = 0;
@@ -677,24 +679,23 @@ fn daisuushii(ky: *const Kyoku, seat: Seat, tsumo: bool, decomp: Decomp) ?YakuCo
         if (b.kind != .kotsu and b.kind != .kantsu) continue;
         if (pai_util.isKazehai(b.tiles[0])) kaze_kotsu += 1;
     }
-    if (kaze_kotsu == 4) return .{ .yakuman = 2 };
-    return null;
+    if (kaze_kotsu != 4) return null;
+    return .{ .yakuman = if (ky.rules.daisuushii_double) 2 else 1 };
 }
 
 fn junseichuurenpoutou(ky: *const Kyoku, seat: Seat, tsumo: bool, decomp: Decomp) ?YakuCount {
     _ = tsumo;
     if (!ky.players[seat].isMenzen()) return null;
     if (chuurenKind(decomp) != true) return null;
-    return .{ .yakuman = 2 };
+    return .{ .yakuman = if (ky.rules.junsei_chuuren_double) 2 else 1 };
 }
 
 fn suuankootanki(ky: *const Kyoku, seat: Seat, tsumo: bool, decomp: Decomp) ?YakuCount {
-    _ = ky;
     _ = seat;
     _ = tsumo;
     if (ankouCount(decomp) != 4) return null;
     if (decomp.blocks[0].winning == null) return null;
-    return .{ .yakuman = 2 };
+    return .{ .yakuman = if (ky.rules.suuankou_tanki_double) 2 else 1 };
 }
 
 // ---------------------------------------------------------------------------
@@ -780,34 +781,35 @@ fn hasKotsuOrKantsu(decomp: Decomp, tile: types.Pai) bool {
 }
 
 fn doraHan(decomp: Decomp, markers: []const types.Pai) ?YakuCount {
+    var mult: [34]u8 = undefined;
+    fillDoraMult(markers, &mult);
     var n: u8 = 0;
-    var is_dora: [34]bool = undefined;
-    fillDoraMask(markers, &is_dora);
     for (decomp.blocks) |b| {
         for (0..b.tile_len) |i| {
             const k = pai_util.kindId(b.tiles[i]) orelse continue;
-            if (is_dora[k]) n += 1;
+            n += mult[k];
         }
     }
     if (n == 0) return null;
     return .{ .han = n };
 }
 
-fn fillDoraMask(markers: []const types.Pai, is_dora: *[34]bool) void {
-    is_dora.* = .{false} ** 34;
+/// 各牌种作为宝牌的倍数（同指示重复则累加，如两张 2p 指示 → 3p 算 2 翻）。
+fn fillDoraMult(markers: []const types.Pai, mult: *[34]u8) void {
+    mult.* = .{0} ** 34;
     for (markers) |m| {
         const k = pai_util.doraKindFromIndicator(m) orelse continue;
-        is_dora[k] = true;
+        mult[k] += 1;
     }
 }
 
 fn doraHanTiles(tiles: []const types.Pai, markers: []const types.Pai) ?YakuCount {
-    var is_dora: [34]bool = undefined;
-    fillDoraMask(markers, &is_dora);
+    var mult: [34]u8 = undefined;
+    fillDoraMult(markers, &mult);
     var n: u8 = 0;
     for (tiles) |t| {
         const k = pai_util.kindId(t) orelse continue;
-        if (is_dora[k]) n += 1;
+        n += mult[k];
     }
     if (n == 0) return null;
     return .{ .han = n };
@@ -916,6 +918,7 @@ test "yakuChiitoi tsuuiisoo yakuman" {
 test "yakuKokushi single; stacks with tenhou" {
     const std = @import("std");
     const seat_tiles = @import("../seat_tiles.zig");
+    const rules = @import("../../rules.zig");
     var ky = Kyoku.init();
     ky.oya = 0;
     ky.is_first_turn = true;
@@ -929,6 +932,9 @@ test "yakuKokushi single; stacks with tenhou" {
     ky.is_first_turn = false;
     const y13b = countYaku(&ky, 0, true, .kokushi, .{});
     try std.testing.expectEqual(@as(u8, 2), y13b.yakuman);
+
+    ky.rules = rules.Rules.riichienv();
+    try std.testing.expectEqual(@as(u8, 1), countYaku(&ky, 0, true, .kokushi, .{}).yakuman);
 
     // 对子在 1m，进张 C → 非 juusanmen
     var ky2 = Kyoku.init();
@@ -961,4 +967,93 @@ test "yakuStandard: menzen tsumo pinfu danyao" {
     try std.testing.expectEqual(@as(u8, 0), y.yakuman);
     // 门清自摸 + 断幺 + 可能平和
     try std.testing.expect(y.han >= 2);
+}
+
+test "suuankootanki: double vs riichienv single" {
+    const std = @import("std");
+    const seat_tiles = @import("../seat_tiles.zig");
+    const rules = @import("../../rules.zig");
+
+    // 111m 222p 333s CCC WW + 摸 W：四暗刻单骑
+    const tiles = [_]types.Pai{ "1m", "1m", "1m", "2p", "2p", "2p", "3s", "3s", "3s", "C", "C", "C", "W", "W" };
+    var ky = Kyoku.init();
+    ky.is_first_turn = false;
+    for (tiles) |t| seat_tiles.addToHand(&ky, 0, t);
+    ky.drawn = "W";
+
+    var buf: [64]standard.StandardDecomp = undefined;
+    const decomps = standard.standardDecomps(&ky, 0, true, &buf);
+    try std.testing.expect(decomps.len >= 1);
+    // 取雀头进张的拆解
+    var tanki_decomp: ?standard.StandardDecomp = null;
+    for (decomps) |d| {
+        if (d.blocks[0].winning != null) {
+            tanki_decomp = d;
+            break;
+        }
+    }
+    try std.testing.expect(tanki_decomp != null);
+
+    ky.rules = rules.Rules.default();
+    try std.testing.expectEqual(@as(u8, 2), countYaku(&ky, 0, true, .standard, tanki_decomp.?).yakuman);
+
+    ky.rules = rules.Rules.riichienv();
+    try std.testing.expectEqual(@as(u8, 1), countYaku(&ky, 0, true, .standard, tanki_decomp.?).yakuman);
+}
+
+test "daisuushii: double vs riichienv single" {
+    const std = @import("std");
+    const seat_tiles = @import("../seat_tiles.zig");
+    const rules = @import("../../rules.zig");
+
+    // 大四喜副露三风刻，避免叠四暗刻：碰 E/S/W + 手牌 NNN 11m 摸 1m
+    var ky = Kyoku.init();
+    ky.is_first_turn = false;
+    for ([_]types.Pai{ "E", "S", "W" }) |w| {
+        var f: kyoku_mod.Fuuro = .{ .kind = .pon, .tile_len = 3, .from = 1 };
+        f.tiles = .{ w, w, w, undefined };
+        seat_tiles.addFuuro(&ky, 0, f);
+    }
+    for ([_]types.Pai{ "N", "N", "N", "1m", "1m" }) |t| seat_tiles.addToHand(&ky, 0, t);
+    ky.drawn = "1m";
+
+    var buf: [64]standard.StandardDecomp = undefined;
+    const decomps = standard.standardDecomps(&ky, 0, true, &buf);
+    try std.testing.expect(decomps.len >= 1);
+
+    ky.rules = rules.Rules.default();
+    try std.testing.expectEqual(@as(u8, 2), countYaku(&ky, 0, true, .standard, decomps[0]).yakuman);
+
+    ky.rules = rules.Rules.riichienv();
+    try std.testing.expectEqual(@as(u8, 1), countYaku(&ky, 0, true, .standard, decomps[0]).yakuman);
+}
+
+test "doraHan: duplicate markers stack" {
+    const std = @import("std");
+    const seat_tiles = @import("../seat_tiles.zig");
+
+    var ky = Kyoku.init();
+    ky.is_first_turn = false;
+    // 吃 345p（含一张 3p）+ 三碰占位；雀头自摸 2m
+    var f0: kyoku_mod.Fuuro = .{ .kind = .chi, .tile_len = 3, .from = 1 };
+    f0.tiles = .{ "3p", "4p", "5p", undefined };
+    seat_tiles.addFuuro(&ky, 0, f0);
+    var i: u8 = 0;
+    while (i < 3) : (i += 1) {
+        var f: kyoku_mod.Fuuro = .{ .kind = .pon, .tile_len = 3, .from = 1 };
+        f.tiles = .{ "9s", "9s", "9s", undefined };
+        seat_tiles.addFuuro(&ky, 0, f);
+    }
+    seat_tiles.addToHand(&ky, 0, "2m");
+    seat_tiles.addToHand(&ky, 0, "2m");
+    ky.drawn = "2m";
+    ky.yama.dora_markers = .{ "2p", "2p", undefined, undefined, undefined };
+    ky.yama.dora_markers_len = 2;
+
+    var buf: [64]standard.StandardDecomp = undefined;
+    const decomps = standard.standardDecomps(&ky, 0, true, &buf);
+    try std.testing.expect(decomps.len >= 1);
+    const d = doraHan(decomps[0], ky.doraMarkersSlice());
+    try std.testing.expect(d != null);
+    try std.testing.expectEqual(@as(u8, 2), d.?.han);
 }

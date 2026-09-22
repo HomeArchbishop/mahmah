@@ -236,3 +236,57 @@ test "countFu: menzen tsumo + ankou rounds to 30" {
     try std.testing.expect(decomps.len >= 1);
     try std.testing.expectEqual(@as(u16, 30), countFu(&ky, 0, true, .standard, decomps[0]));
 }
+
+test "countFu: open tanki tsumo kakan+daiminkan (seed1139 shape)" {
+    const std = @import("std");
+    const seat_tiles = @import("../seat_tiles.zig");
+    const rules = @import("../../rules.zig");
+    const yaku = @import("yaku.zig");
+    const points = @import("points.zig");
+
+    var ky = Kyoku.init();
+    ky.rules = rules.Rules.riichienv();
+    ky.oya = 0;
+    ky.bakaze = "S";
+    ky.honba = 4;
+    ky.is_first_turn = false;
+    const seat: types.Seat = 3;
+
+    var f0: kyoku_mod.Fuuro = .{ .kind = .chi, .tile_len = 3, .from = 2 };
+    f0.tiles = .{ "3p", "4p", "5p", undefined };
+    seat_tiles.addFuuro(&ky, seat, f0);
+    var f1: kyoku_mod.Fuuro = .{ .kind = .kakan, .tile_len = 4, .from = 2 };
+    f1.tiles = .{ "4m", "4m", "4m", "4m" };
+    seat_tiles.addFuuro(&ky, seat, f1);
+    var f2: kyoku_mod.Fuuro = .{ .kind = .pon, .tile_len = 3, .from = 1 };
+    f2.tiles = .{ "7m", "7m", "7m", undefined };
+    seat_tiles.addFuuro(&ky, seat, f2);
+    var f3: kyoku_mod.Fuuro = .{ .kind = .daiminkan, .tile_len = 4, .from = 1 };
+    f3.tiles = .{ "C", "C", "C", "C" };
+    seat_tiles.addFuuro(&ky, seat, f3);
+
+    seat_tiles.addToHand(&ky, seat, "N");
+    seat_tiles.addToHand(&ky, seat, "N");
+    ky.drawn = "N";
+    ky.turn = seat;
+    ky.yama.dora_markers = .{ "2p", "1s", "2p", undefined, undefined };
+    ky.yama.dora_markers_len = 3;
+
+    // 20 + 明杠中张8 + 明刻2 + 明杠字16 + 自风雀头2 + 单骑2 + 自摸2 = 52 → 60
+    var buf: [64]Decomp = undefined;
+    const decomps = standard.standardDecomps(&ky, seat, true, &buf);
+    try std.testing.expect(decomps.len >= 1);
+    const decomp = decomps[0];
+    try std.testing.expectEqual(@as(u16, 60), countFu(&ky, seat, true, .standard, decomp));
+
+    const y = yaku.countYaku(&ky, seat, true, .standard, decomp);
+    // 中1 + 二重ドラ3p（指示 2p×2）= 3 翻；符 60 → 子ツモ本场4 = 9100
+    try std.testing.expectEqual(@as(u8, 3), y.han);
+
+    const v: points.HoraValue = .{ .han = y.han, .fu = 60 };
+    const d = points.horaDeltas(seat, seat, ky.oya, v, ky.honba, 0, true, ky.rules.kiriage_mangan);
+    try std.testing.expectEqual(@as(i32, -4300), d[0]);
+    try std.testing.expectEqual(@as(i32, -2400), d[1]);
+    try std.testing.expectEqual(@as(i32, -2400), d[2]);
+    try std.testing.expectEqual(@as(i32, 9100), d[3]);
+}

@@ -8,6 +8,7 @@ const pai_util = @import("pai.zig");
 const referee = @import("referee/root.zig");
 const round = @import("round.zig");
 const kuikae = @import("kuikae.zig");
+const ryuukyoku = @import("ryuukyoku.zig");
 
 const Kyoku = kyoku_mod.Kyoku;
 const Action = types.Action;
@@ -62,19 +63,73 @@ pub fn hasClaimOpportunity(ky: *const Kyoku, discarder: Seat) bool {
 }
 
 /// 座位是否可应（荣 / 碰杠 / 吃）。进张为 `response_pai`。
+/// 途中流局已成立时仅可荣（吃碰杠不打断四杠散了等）。
 pub fn seatHasClaim(ky: *const Kyoku, seat: Seat, discarder: Seat, chankan: bool) bool {
     if (seat == discarder) return false;
     const pai = ky.response_pai orelse return false;
     if (canRon(ky, seat)) return true;
     if (chankan) return false;
+    if (ryuukyoku.isTochuAbortPending(ky)) return false;
     if (!ky.yama.hasLive()) return false;
     if (ky.players[seat].riichi) return false;
 
     const hand = ky.handSlice(seat);
-    if (pai_util.countKind(hand, pai) >= 2) return true;
+    if (pai_util.countKind(hand, pai) >= 2) {
+        // 碰后须有非食替可切
+        var cands: [4]Pai = undefined;
+        const nc = collectKindTiles(hand, pai, &cands);
+        var i: usize = 0;
+        while (i < nc) : (i += 1) {
+            var j: usize = i + 1;
+            while (j < nc) : (j += 1) {
+                if (canDiscardAfterPon(ky, hand, pai, cands[i], cands[j])) return true;
+            }
+        }
+        // 无合法碰时仍可能大明杠（杠后摸岭上，不经食替禁切）；已四杠则不可再杠
+        if (pai_util.countKind(hand, pai) >= 3 and ky.kan_count < 4) return true;
+    }
 
     if (seat != round.nextSeat(discarder)) return false;
-    return canChiKinds(hand, pai);
+    return canChiWithLegalDiscard(ky, hand, pai);
+}
+
+/// 下家能否吃，且吃后有非食替可切。
+fn canChiWithLegalDiscard(ky: *const Kyoku, hand: []const Pai, pai: Pai) bool {
+    const s = pai_util.suit(pai) orelse return false;
+    const r = pai_util.rank(pai) orelse return false;
+    const patterns = [_][2]i8{ .{ -2, -1 }, .{ -1, 1 }, .{ 1, 2 } };
+    for (patterns) |pat| {
+        const r1 = @as(i16, r) + pat[0];
+        const r2 = @as(i16, r) + pat[1];
+        if (r1 < 1 or r1 > 9 or r2 < 1 or r2 > 9) continue;
+        const t1 = pai_util.suitedLiteral(@intCast(r1), s);
+        const t2 = pai_util.suitedLiteral(@intCast(r2), s);
+
+        var cand1: [4]Pai = undefined;
+        var cand2: [4]Pai = undefined;
+        const n1 = collectKindTiles(hand, t1, &cand1);
+        const n2 = collectKindTiles(hand, t2, &cand2);
+        if (n1 == 0 or n2 == 0) continue;
+
+        if (pai_util.sameKind(t1, t2)) {
+            var i: usize = 0;
+            while (i < n1) : (i += 1) {
+                var j: usize = i + 1;
+                while (j < n1) : (j += 1) {
+                    if (canDiscardAfterChi(ky, hand, pai, cand1[i], cand1[j])) return true;
+                }
+            }
+        } else {
+            var i: usize = 0;
+            while (i < n1) : (i += 1) {
+                var j: usize = 0;
+                while (j < n2) : (j += 1) {
+                    if (canDiscardAfterChi(ky, hand, pai, cand1[i], cand2[j])) return true;
+                }
+            }
+        }
+    }
+    return false;
 }
 
 /// 国士抢暗杠：进张为 `response_pai`，含振听检查。
@@ -106,7 +161,7 @@ fn fillWaitAct(ky: *const Kyoku, seat: Seat, out: []Action) []Action {
     }
 
     // 九种九牌：首巡未切、无副露；14 张（含摸牌）中不同幺九种类 ≥ 9
-    if (ky.is_first_turn and p.river_len == 0 and p.fuuro_len == 0 and ky.drawn != null) {
+    if (ky.rules.abort_kyushu and ky.is_first_turn and p.river_len == 0 and p.fuuro_len == 0 and ky.drawn != null) {
         if (kyushuKindCount(ky.handSlice(seat)) >= 9) {
             if (n < out.len) {
                 out[n] = .ryukyoku;
@@ -115,7 +170,10 @@ fn fillWaitAct(ky: *const Kyoku, seat: Seat, out: []Action) []Action {
         }
     }
 
-    if (!p.riichi and ky.pending_riichi == null and p.isMenzen() and ky.scores[seat] >= 1000 and ky.drawn != null) {
+    // 活山 < 4 不可立直（须至少再摸一轮）
+    if (!p.riichi and ky.pending_riichi == null and p.isMenzen() and ky.scores[seat] >= 1000 and
+        ky.drawn != null and ky.yama.liveRemaining() >= 4)
+    {
         if (canDeclareRiichi(ky, seat)) {
             if (n < out.len) {
                 out[n] = .reach;
@@ -158,9 +216,10 @@ fn dahaiAlreadyListed(listed: []const Action, pai: Pai, tsumogiri: bool) bool {
 }
 
 fn appendAnkanKakan(ky: *const Kyoku, seat: Seat, out: []Action, start: usize) usize {
-    // 吃碰后打牌前、河海底：不可杠
+    // 吃碰后打牌前、河海底、已四杠：不可再杠
     if (ky.drawn == null) return start;
     if (!ky.yama.hasLive()) return start;
+    if (ky.kan_count >= 4) return start;
 
     var n = start;
     const hand = ky.handSlice(seat);
@@ -174,7 +233,7 @@ fn appendAnkanKakan(ky: *const Kyoku, seat: Seat, out: []Action, start: usize) u
         seen[id] = true;
         if (pai_util.countKind(hand, tile) < 4) continue;
         // 立直中：仅听口不变的暗杠
-        if (p.riichi and !ankanPreservesWaits(ky, seat, tile)) continue;
+        if (p.riichi and ky.rules.riichi_ankan_must_preserve_wait and !ankanPreservesWaits(ky, seat, tile)) continue;
         var consumed: [4]Pai = undefined;
         if (pai_util.takeKinds(hand, tile, 4, &consumed) < 4) continue;
         if (n < out.len) {
@@ -307,8 +366,8 @@ fn fillWaitResponse(ky: *const Kyoku, seat: Seat, out: []Action) []Action {
         n += 1;
     }
 
-    // 河底不可吃碰明杠（仍可荣）
-    if (ky.yama.hasLive()) {
+    // 途中流局待决 / 河底：不可吃碰明杠（仍可荣）
+    if (!ryuukyoku.isTochuAbortPending(ky) and ky.yama.hasLive()) {
         n = appendPonDaiminkan(ky, seat, pai, out, n);
         if (seat == round.nextSeat(discarder)) {
             n = appendChi(ky, seat, pai, out, n);
@@ -320,26 +379,6 @@ fn fillWaitResponse(ky: *const Kyoku, seat: Seat, out: []Action) []Action {
 fn canRon(ky: *const Kyoku, seat: Seat) bool {
     if (ky.response_pai == null) return false;
     return referee.canAgari(ky, seat, false);
-}
-
-/// 下家能否吃：仅看种类是否凑得出顺子，不枚举赤牌组合。
-fn canChiKinds(hand: []const Pai, pai: Pai) bool {
-    const s = pai_util.suit(pai) orelse return false;
-    const r = pai_util.rank(pai) orelse return false;
-    const patterns = [_][2]i8{ .{ -2, -1 }, .{ -1, 1 }, .{ 1, 2 } };
-    for (patterns) |pat| {
-        const r1 = @as(i16, r) + pat[0];
-        const r2 = @as(i16, r) + pat[1];
-        if (r1 < 1 or r1 > 9 or r2 < 1 or r2 > 9) continue;
-        const t1 = pai_util.suitedLiteral(@intCast(r1), s);
-        const t2 = pai_util.suitedLiteral(@intCast(r2), s);
-        if (pai_util.sameKind(t1, t2)) {
-            if (pai_util.countKind(hand, t1) >= 2) return true;
-        } else if (pai_util.countKind(hand, t1) >= 1 and pai_util.countKind(hand, t2) >= 1) {
-            return true;
-        }
-    }
-    return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -359,11 +398,12 @@ fn appendPonDaiminkan(ky: *const Kyoku, seat: Seat, pai: Pai, out: []Action, sta
         while (i < nc) : (i += 1) {
             var j: usize = i + 1;
             while (j < nc) : (j += 1) {
+                if (!canDiscardAfterPon(ky, hand, pai, cands[i], cands[j])) continue;
                 n = pushPonUnique(out, n, pai, cands[i], cands[j]);
             }
         }
     }
-    if (cnt >= 3 and ky.yama.hasLive()) {
+    if (cnt >= 3 and ky.yama.hasLive() and ky.kan_count < 4) {
         var cands: [4]Pai = undefined;
         const nc = collectKindTiles(hand, pai, &cands);
         var i: usize = 0;
@@ -406,6 +446,7 @@ fn appendChi(ky: *const Kyoku, seat: Seat, pai: Pai, out: []Action, start: usize
             while (i < n1) : (i += 1) {
                 var j: usize = i + 1;
                 while (j < n1) : (j += 1) {
+                    if (!canDiscardAfterChi(ky, hand, pai, cand1[i], cand1[j])) continue;
                     n = pushChiUnique(out, n, pai, cand1[i], cand1[j]);
                 }
             }
@@ -416,11 +457,47 @@ fn appendChi(ky: *const Kyoku, seat: Seat, pai: Pai, out: []Action, start: usize
         while (i < n1) : (i += 1) {
             var j: usize = 0;
             while (j < n2) : (j += 1) {
+                if (!canDiscardAfterChi(ky, hand, pai, cand1[i], cand2[j])) continue;
                 n = pushChiUnique(out, n, pai, cand1[i], cand2[j]);
             }
         }
     }
     return n;
+}
+
+/// 吃/碰后须有非食替禁切可打。手牌去掉 `consumed` 后若全被禁则不可鸣。
+fn canDiscardAfterChi(ky: *const Kyoku, hand: []const Pai, claimed: Pai, a: Pai, b: Pai) bool {
+    if (!ky.rules.kuikae) return true;
+    var forbid: [2]u8 = undefined;
+    const fn_n = kuikae.chiForbidKinds(claimed, .{ a, b }, ky.rules.kuikae_suji, &forbid);
+    return hasNonForbiddenRemain(hand, &.{ a, b }, forbid[0..fn_n]);
+}
+
+fn canDiscardAfterPon(ky: *const Kyoku, hand: []const Pai, claimed: Pai, a: Pai, b: Pai) bool {
+    if (!ky.rules.kuikae) return true;
+    var forbid: [1]u8 = undefined;
+    const fn_n = kuikae.ponForbidKinds(claimed, &forbid);
+    return hasNonForbiddenRemain(hand, &.{ a, b }, forbid[0..fn_n]);
+}
+
+fn hasNonForbiddenRemain(hand: []const Pai, consumed: []const Pai, forbid: []const u8) bool {
+    var used: [14]bool = .{false} ** 14;
+    for (consumed) |need| {
+        var found = false;
+        for (hand, 0..) |p, i| {
+            if (used[i]) continue;
+            if (!types.paiEql(p, need)) continue;
+            used[i] = true;
+            found = true;
+            break;
+        }
+        if (!found) return false;
+    }
+    for (hand, 0..) |p, i| {
+        if (used[i]) continue;
+        if (!kuikae.kindForbidden(forbid, p)) return true;
+    }
+    return false;
 }
 
 fn pushPonUnique(out: []Action, start: usize, pai: Pai, a: Pai, b: Pai) usize {
@@ -514,3 +591,65 @@ fn sort3Pai(a: *[3]Pai) void {
 fn paiLess(a: Pai, b: Pai) bool {
     return std.mem.order(u8, a, b) == .lt;
 }
+
+test "chi blocked when kuikae leaves no discard (78 chi 9, remain 99)" {
+    const seat_tiles = @import("seat_tiles.zig");
+
+    var ky = Kyoku.init();
+    ky.rules.kuikae = true;
+    ky.rules.kuikae_suji = true;
+    // 三副露占位 → 手牌 4 张应手
+    var i: u8 = 0;
+    while (i < 3) : (i += 1) {
+        var f: kyoku_mod.Fuuro = .{ .kind = .pon, .tile_len = 3, .from = 0 };
+        f.tiles = .{ "1m", "1m", "1m", undefined };
+        seat_tiles.addFuuro(&ky, 1, f);
+    }
+    for ([_]Pai{ "7s", "8s", "9s", "9s" }) |t| seat_tiles.addToHand(&ky, 1, t);
+
+    ky.phase = .wait_response;
+    ky.response_pai = "9s";
+    ky.response_from = 0;
+    ky.response_open = .{ false, true, false, false };
+
+    var buf: [32]Action = undefined;
+    const legal = fillLegal(&ky, 1, &buf);
+    var has_chi = false;
+    var has_pon = false;
+    for (legal) |a| {
+        switch (a) {
+            .chi => |c| {
+                if (types.paiEql(c.pai, "9s")) has_chi = true;
+            },
+            .pon => has_pon = true,
+            else => {},
+        }
+    }
+    try std.testing.expect(has_pon);
+    try std.testing.expect(!has_chi);
+}
+
+test "no 5th kan when kan_count >= 4" {
+    const seat_tiles = @import("seat_tiles.zig");
+
+    var ky = Kyoku.init();
+    ky.phase = .wait_act;
+    ky.turn = 0;
+    ky.kan_count = 4;
+    ky.drawn = "6m";
+    // 碰 6m + 摸 6m → 否则可加杠
+    var f: kyoku_mod.Fuuro = .{ .kind = .pon, .tile_len = 3, .from = 1 };
+    f.tiles = .{ "6m", "6m", "6m", undefined };
+    seat_tiles.addFuuro(&ky, 0, f);
+    for ([_]Pai{ "1p", "2p", "3p", "4p", "5p", "7p", "8p", "9p", "1s", "2s", "6m" }) |t| {
+        seat_tiles.addToHand(&ky, 0, t);
+    }
+
+    var buf: [32]Action = undefined;
+    const legal = fillLegal(&ky, 0, &buf);
+    for (legal) |a| {
+        try std.testing.expect(a != .kakan);
+        try std.testing.expect(a != .ankan);
+    }
+}
+

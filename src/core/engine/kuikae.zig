@@ -11,32 +11,57 @@ pub fn clear(ky: *Kyoku) void {
 }
 
 pub fn forbids(ky: *const Kyoku, pai: Pai) bool {
+    if (!ky.rules.kuikae) return false;
+    return kindForbidden(ky.kuikae_kinds[0..ky.kuikae_len], pai);
+}
+
+pub fn kindForbidden(kinds: []const u8, pai: Pai) bool {
     const id = pai_util.kindId(pai) orelse return false;
-    var i: u8 = 0;
-    while (i < ky.kuikae_len) : (i += 1) {
-        if (ky.kuikae_kinds[i] == id) return true;
+    for (kinds) |k| {
+        if (k == id) return true;
     }
     return false;
 }
 
 pub fn setPon(ky: *Kyoku, claimed: Pai) void {
     clear(ky);
-    const id = pai_util.kindId(claimed) orelse return;
-    ky.kuikae_kinds[0] = id;
-    ky.kuikae_len = 1;
+    if (!ky.rules.kuikae) return;
+    var buf: [1]u8 = undefined;
+    const n = ponForbidKinds(claimed, &buf);
+    @memcpy(ky.kuikae_kinds[0..n], buf[0..n]);
+    ky.kuikae_len = n;
 }
 
-/// 吃：禁叫牌种；若吃边张，另禁对侧筋（123 吃 3 → 禁 1；456 吃 4 → 禁 7）。
+/// 吃：禁叫牌种；若吃边张且 `kuikae_suji`，另禁对侧筋。
 pub fn setChi(ky: *Kyoku, claimed: Pai, consumed: [2]Pai) void {
     clear(ky);
-    const cid = pai_util.kindId(claimed) orelse return;
-    add(ky, cid);
+    if (!ky.rules.kuikae) return;
+    var buf: [2]u8 = undefined;
+    const n = chiForbidKinds(claimed, consumed, ky.rules.kuikae_suji, &buf);
+    @memcpy(ky.kuikae_kinds[0..n], buf[0..n]);
+    ky.kuikae_len = n;
+}
 
-    const suit = pai_util.suit(claimed) orelse return;
+/// 碰后禁切 kinds（现物）。
+pub fn ponForbidKinds(claimed: Pai, out: *[1]u8) u8 {
+    const id = pai_util.kindId(claimed) orelse return 0;
+    out[0] = id;
+    return 1;
+}
+
+/// 吃后禁切 kinds。`suji=true` 时边张另禁对侧。
+pub fn chiForbidKinds(claimed: Pai, consumed: [2]Pai, suji: bool, out: *[2]u8) u8 {
+    const cid = pai_util.kindId(claimed) orelse return 0;
+    var n: u8 = 0;
+    out[n] = cid;
+    n += 1;
+    if (!suji) return n;
+
+    const suit = pai_util.suit(claimed) orelse return n;
     var ranks: [3]u8 = .{
-        pai_util.rank(claimed) orelse return,
-        pai_util.rank(consumed[0]) orelse return,
-        pai_util.rank(consumed[1]) orelse return,
+        pai_util.rank(claimed) orelse return n,
+        pai_util.rank(consumed[0]) orelse return n,
+        pai_util.rank(consumed[1]) orelse return n,
     };
     // 升序
     if (ranks[0] > ranks[1]) {
@@ -56,23 +81,19 @@ pub fn setChi(ky: *Kyoku, claimed: Pai, consumed: [2]Pai) void {
     }
 
     const claimed_r = pai_util.rank(claimed).?;
-    if (claimed_r == ranks[0] and ranks[2] < 9) {
-        // 吃低边 → 禁高+1
-        if (kindFromSuitRank(suit, ranks[2] + 1)) |k| add(ky, k);
-    } else if (claimed_r == ranks[2] and ranks[0] > 1) {
-        // 吃高边 → 禁低-1
-        if (kindFromSuitRank(suit, ranks[0] - 1)) |k| add(ky, k);
+    const extra: ?u8 = if (claimed_r == ranks[0] and ranks[2] < 9)
+        kindFromSuitRank(suit, ranks[2] + 1)
+    else if (claimed_r == ranks[2] and ranks[0] > 1)
+        kindFromSuitRank(suit, ranks[0] - 1)
+    else
+        null;
+    if (extra) |k| {
+        if (k != cid) {
+            out[n] = k;
+            n += 1;
+        }
     }
-}
-
-fn add(ky: *Kyoku, kind: u8) void {
-    var i: u8 = 0;
-    while (i < ky.kuikae_len) : (i += 1) {
-        if (ky.kuikae_kinds[i] == kind) return;
-    }
-    if (ky.kuikae_len >= ky.kuikae_kinds.len) return;
-    ky.kuikae_kinds[ky.kuikae_len] = kind;
-    ky.kuikae_len += 1;
+    return n;
 }
 
 fn kindFromSuitRank(suit_ch: u8, r: u8) ?u8 {
@@ -114,4 +135,13 @@ test "setPon: only claimed kind" {
     setPon(&ky, "E");
     try std.testing.expect(forbids(&ky, "E"));
     try std.testing.expect(!forbids(&ky, "S"));
+}
+
+test "chiForbidKinds: 78 chi 9 forbids 9 and 6" {
+    const std = @import("std");
+    var buf: [2]u8 = undefined;
+    const n = chiForbidKinds("9s", .{ "7s", "8s" }, true, &buf);
+    try std.testing.expectEqual(@as(u8, 2), n);
+    try std.testing.expect(kindForbidden(buf[0..n], "9s"));
+    try std.testing.expect(kindForbidden(buf[0..n], "6s"));
 }

@@ -21,11 +21,12 @@ cd tests && uv sync
 uv run python -m diff --seeds 5 -v
 ```
 
-领导进程同牌山驱动标准（riichienv）与 `mjai_diff`：比合法集与 MJAI 事件，半庄多局，着法优先和/立直/鸣牌。
+领导进程同牌山驱动标准（riichienv）与 `mjai_diff`：比合法集与 MJAI 事件，半庄多局，着法优先和/立直/鸣牌。每次跑完打印并覆盖写 `tests/diff/coverage-latest.md`（本次覆盖了哪些情况/役、对应 seed）。
 
-覆盖 checklist（`tests/diff/checklist.yaml`：人工加条目；役种由 `YAKU_CATALOG` 自动补齐；`scan` 写 count/样例 seed）：
+细则：`src/core/rules.zig`。产品 `Rules.default()`（含切上）；`mjai_diff` 固定 `Rules.riichienv()`（关切上）。见 `docs/superpowers/specs/2026-09-22-rules-config-design.md`。
+
+覆盖条目目录：`tests/diff/checklist.yaml`（只维护 id/group/desc；役种可 `uv run python -m diff coverage ensure` 补齐）。查看上次报告：
 
 ```bash
-uv run python -m diff coverage scan --seeds 200 --replace
 uv run python -m diff coverage report
 ```

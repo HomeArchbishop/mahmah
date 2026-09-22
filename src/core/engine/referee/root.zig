@@ -87,7 +87,7 @@ pub fn evaluateHora(ky: *const Kyoku, seat: Seat, tsumo: bool) HoraValue {
         if (y.yakuman == 0 and y.han == 0) continue;
         const fu_n = fu.countFu(ky, seat, tsumo, .standard, decomp);
         const cand: HoraValue = .{ .han = y.han, .fu = fu_n, .yakuman = y.yakuman };
-        const bp = points.basicPoints(cand.han, cand.fu, cand.yakuman);
+        const bp = points.basicPoints(cand.han, cand.fu, cand.yakuman, ky.rules.kiriage_mangan);
         if (bp > best_bp) {
             best_bp = bp;
             best = cand;
