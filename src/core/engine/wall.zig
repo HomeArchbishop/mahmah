@@ -152,6 +152,12 @@ pub fn prepare(ky: *Kyoku) void {
     ky.yama.resetCursors();
 }
 
+/// 装入已定序的 136 张（与 `liveTileIndex` / 死山下标一致）。不洗牌。
+pub fn loadWall(ky: *Kyoku, tiles: *const [WALL_LEN]Pai) void {
+    ky.yama.tiles = tiles.*;
+    ky.yama.resetCursors();
+}
+
 /// 从活牌山摸一张；山空返回 null。
 pub fn drawLive(ky: *Kyoku) ?Pai {
     const y = &ky.yama;

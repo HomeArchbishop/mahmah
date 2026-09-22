@@ -9,7 +9,7 @@
 //!
 //! # 公开入口
 //! - `standardDecomps`：枚举标准型拆解（含进张归属）
-//! - `hasStandardShape`：指定进张是否成标准型（仅形，供听牌扫描）
+//! - `hasStandardShape`：手里未亮的牌 + 进张是否成标准型（仅形，供听牌扫描）
 //!
 //! # 流程 `standardDecomps`
 //! 1. 取进张；组闭张；`need_mentsu = 4 - fuuro_len`
@@ -73,19 +73,16 @@ pub fn standardDecomps(ky: *const Kyoku, seat: Seat, tsumo: bool, out: []Standar
     return standardDecompsWith(ky, seat, winning, tsumo, out);
 }
 
-/// 指定进张时闭张是否成标准型（仅形，不含役/振听）。
-pub fn hasStandardShape(ky: *const Kyoku, seat: Seat, winning: Pai) bool {
+/// 手里未亮的牌（不含进张）+ 进张是否成标准型（仅形，不含役/振听）。
+pub fn hasStandardShape(closed: []const Pai, fuuro_len: u8, winning: Pai) bool {
     const winning_kind = pai_util.kindId(winning) orelse return false;
-    const player = &ky.players[seat];
-    if (player.fuuro_len > MAX_MENTSU) return false;
-    const need_mentsu: u8 = MAX_MENTSU - player.fuuro_len;
-
-    const hand = ky.handSlice(seat);
+    if (fuuro_len > MAX_MENTSU) return false;
+    const need_mentsu: u8 = MAX_MENTSU - fuuro_len;
     const expect: usize = @as(usize, need_mentsu) * 3 + 2;
-    if (hand.len + 1 != expect) return false;
+    if (closed.len + 1 != expect) return false;
 
     var counts: [34]u8 = .{0} ** 34;
-    for (hand) |tile| {
+    for (closed) |tile| {
         counts[pai_util.kindId(tile) orelse return false] += 1;
     }
     counts[winning_kind] += 1;

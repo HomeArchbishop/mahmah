@@ -41,7 +41,7 @@ pub fn applyHowanpai(ky: *Kyoku, out: []Event, start: usize) []Event {
     var s: u8 = 0;
     while (s < CAPACITY) : (s += 1) {
         nagashi[s] = referee.isNagashi(ky, @intCast(s));
-        tenpai[s] = referee.isTenpai(ky, @intCast(s));
+        tenpai[s] = referee.isTenpai(ky.handSlice(@intCast(s)), ky.players[s].fuuro_len);
         if (nagashi[s]) any_nagashi = true;
     }
 

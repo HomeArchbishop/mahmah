@@ -1,3 +1,4 @@
+const std = @import("std");
 const types = @import("../types.zig");
 const kyoku_mod = @import("../kyoku.zig");
 const pai_util = @import("pai.zig");
@@ -49,11 +50,13 @@ fn legalWaitAct(ky: *const Kyoku, seat: Seat, out: []Action) []Action {
         }
     }
 
-    // 立直（暗杠仍门前）
+    // 立直：门前、有点棒、有摸牌，且存在切牌后听牌
     if (!p.riichi and ky.pending_riichi == null and p.isMenzen() and ky.scores[seat] >= 1000 and ky.drawn != null) {
-        if (n < out.len) {
-            out[n] = .reach;
-            n += 1;
+        if (canDeclareRiichi(ky, seat)) {
+            if (n < out.len) {
+                out[n] = .reach;
+                n += 1;
+            }
         }
     }
 
@@ -169,10 +172,12 @@ fn legalWaitResponse(ky: *const Kyoku, seat: Seat, out: []Action) []Action {
         }
     }
 
-    n = appendPonKan(ky, seat, pai, out, n);
-
-    if (seat == round.nextSeat(discarder)) {
-        n = appendChi(ky, seat, pai, out, n);
+    // 河底：无牌可摸时不可吃碰明杠（仍可荣）
+    if (ky.yama.hasLive()) {
+        n = appendPonKan(ky, seat, pai, out, n);
+        if (seat == round.nextSeat(discarder)) {
+            n = appendChi(ky, seat, pai, out, n);
+        }
     }
 
     return out[0..n];
@@ -199,24 +204,99 @@ fn appendPonKan(ky: *const Kyoku, seat: Seat, pai: Pai, out: []Action, start: us
 
     const cnt = pai_util.countKind(hand, pai);
     if (cnt >= 2) {
-        var consumed: [2]Pai = undefined;
-        if (pai_util.takeKinds(hand, pai, 2, &consumed) == 2) {
-            if (n < out.len) {
-                out[n] = .{ .pon = .{ .pai = pai, .consumed = consumed } };
-                n += 1;
+        var cands: [4]Pai = undefined;
+        const nc = collectKindTiles(hand, pai, &cands);
+        var i: usize = 0;
+        while (i < nc) : (i += 1) {
+            var j: usize = i + 1;
+            while (j < nc) : (j += 1) {
+                n = pushPonUnique(out, n, pai, cands[i], cands[j]);
             }
         }
     }
     if (cnt >= 3 and ky.yama.hasLive()) {
-        var consumed3: [3]Pai = undefined;
-        if (pai_util.takeKinds(hand, pai, 3, &consumed3) == 3) {
-            if (n < out.len) {
-                out[n] = .{ .daiminkan = .{ .pai = pai, .consumed = consumed3 } };
-                n += 1;
+        var cands: [4]Pai = undefined;
+        const nc = collectKindTiles(hand, pai, &cands);
+        var i: usize = 0;
+        while (i < nc) : (i += 1) {
+            var j: usize = i + 1;
+            while (j < nc) : (j += 1) {
+                var k: usize = j + 1;
+                while (k < nc) : (k += 1) {
+                    n = pushDaiminkanUnique(out, n, pai, cands[i], cands[j], cands[k]);
+                }
             }
         }
     }
     return n;
+}
+
+fn pushPonUnique(out: []Action, start: usize, pai: Pai, a: Pai, b: Pai) usize {
+    var n = start;
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        if (out[i] != .pon) continue;
+        if (!types.paiEql(out[i].pon.pai, pai)) continue;
+        const c = out[i].pon.consumed;
+        if ((types.paiEql(c[0], a) and types.paiEql(c[1], b)) or
+            (types.paiEql(c[0], b) and types.paiEql(c[1], a)))
+            return n;
+    }
+    if (n < out.len) {
+        out[n] = .{ .pon = .{ .pai = pai, .consumed = .{ a, b } } };
+        n += 1;
+    }
+    return n;
+}
+
+fn pushDaiminkanUnique(out: []Action, start: usize, pai: Pai, a: Pai, b: Pai, c: Pai) usize {
+    var n = start;
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        if (out[i] != .daiminkan) continue;
+        if (!types.paiEql(out[i].daiminkan.pai, pai)) continue;
+        // 多重集相等
+        var want = [_]Pai{ a, b, c };
+        var got = out[i].daiminkan.consumed;
+        stdSortPai(&want);
+        stdSortPai3(&got);
+        if (types.paiEql(want[0], got[0]) and types.paiEql(want[1], got[1]) and types.paiEql(want[2], got[2]))
+            return n;
+    }
+    if (n < out.len) {
+        out[n] = .{ .daiminkan = .{ .pai = pai, .consumed = .{ a, b, c } } };
+        n += 1;
+    }
+    return n;
+}
+
+fn stdSortPai(a: *[3]Pai) void {
+    // 简单三元比较排序（按指针地址/内容）
+    inline for (0..2) |_| {
+        if (paiLess(a[1], a[0])) {
+            const t = a[0];
+            a[0] = a[1];
+            a[1] = t;
+        }
+        if (paiLess(a[2], a[1])) {
+            const t = a[1];
+            a[1] = a[2];
+            a[2] = t;
+        }
+        if (paiLess(a[1], a[0])) {
+            const t = a[0];
+            a[0] = a[1];
+            a[1] = t;
+        }
+    }
+}
+
+fn stdSortPai3(a: *[3]Pai) void {
+    stdSortPai(a);
+}
+
+fn paiLess(a: Pai, b: Pai) bool {
+    return std.mem.order(u8, a, b) == .lt;
 }
 
 fn appendChi(ky: *const Kyoku, seat: Seat, pai: Pai, out: []Action, start: usize) usize {
@@ -238,39 +318,63 @@ fn appendChi(ky: *const Kyoku, seat: Seat, pai: Pai, out: []Action, start: usize
         if (r1 < 1 or r1 > 9 or r2 < 1 or r2 > 9) continue;
         const t1 = pai_util.suitedLiteral(@intCast(r1), s);
         const t2 = pai_util.suitedLiteral(@intCast(r2), s);
-        if (pai_util.countKind(hand, t1) < 1) continue;
-        if (pai_util.countKind(hand, t2) < 1) continue;
-        // 若两张同种（不会），或需要两张不同
-        var c1: [1]Pai = undefined;
-        var c2: [1]Pai = undefined;
-        if (pai_util.takeKinds(hand, t1, 1, &c1) < 1) continue;
-        // 临时：若 t1==t2 kind 需要 2 张
+
+        var cand1: [4]Pai = undefined;
+        var cand2: [4]Pai = undefined;
+        const n1 = collectKindTiles(hand, t1, &cand1);
+        const n2 = collectKindTiles(hand, t2, &cand2);
+        if (n1 == 0 or n2 == 0) continue;
+
         if (pai_util.sameKind(t1, t2)) {
-            var two: [2]Pai = undefined;
-            if (pai_util.takeKinds(hand, t1, 2, &two) < 2) continue;
-            if (n < out.len) {
-                out[n] = .{ .chi = .{ .pai = pai, .consumed = .{ two[0], two[1] } } };
-                n += 1;
+            // 两张同种：枚举有序对 i<j
+            var i: usize = 0;
+            while (i < n1) : (i += 1) {
+                var j: usize = i + 1;
+                while (j < n1) : (j += 1) {
+                    n = pushChiUnique(out, n, pai, cand1[i], cand1[j]);
+                }
             }
             continue;
         }
-        // 从剩余手牌取 t2（排除已取的 c1）
-        var tmp: [14]Pai = undefined;
-        var tlen: usize = 0;
-        var removed = false;
-        for (hand) |h| {
-            if (!removed and types.paiEql(h, c1[0])) {
-                removed = true;
-                continue;
+
+        var i: usize = 0;
+        while (i < n1) : (i += 1) {
+            var j: usize = 0;
+            while (j < n2) : (j += 1) {
+                n = pushChiUnique(out, n, pai, cand1[i], cand2[j]);
             }
-            tmp[tlen] = h;
-            tlen += 1;
         }
-        if (pai_util.takeKinds(tmp[0..tlen], t2, 1, &c2) < 1) continue;
-        if (n < out.len) {
-            out[n] = .{ .chi = .{ .pai = pai, .consumed = .{ c1[0], c2[0] } } };
+    }
+    return n;
+}
+
+fn collectKindTiles(hand: []const Pai, target: Pai, out: []Pai) usize {
+    var n: usize = 0;
+    for (hand) |h| {
+        if (n >= out.len) break;
+        if (pai_util.sameKind(h, target)) {
+            out[n] = h;
             n += 1;
         }
+    }
+    return n;
+}
+
+fn pushChiUnique(out: []Action, start: usize, pai: Pai, a: Pai, b: Pai) usize {
+    var n = start;
+    // 去重：consumed 同种多重集
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        if (out[i] != .chi) continue;
+        const c = out[i].chi.consumed;
+        if (!types.paiEql(out[i].chi.pai, pai)) continue;
+        if ((types.paiEql(c[0], a) and types.paiEql(c[1], b)) or
+            (types.paiEql(c[0], b) and types.paiEql(c[1], a)))
+            return n;
+    }
+    if (n < out.len) {
+        out[n] = .{ .chi = .{ .pai = pai, .consumed = .{ a, b } } };
+        n += 1;
     }
     return n;
 }
@@ -289,6 +393,7 @@ pub fn seatHasClaim(ky: *const Kyoku, seat: Seat, discarder: Seat, pai: Pai, cha
     if (seat == discarder) return false;
     if (canRon(ky, seat, pai)) return true;
     if (chankan) return false;
+    if (!ky.yama.hasLive()) return false;
     if (ky.players[seat].riichi) return false;
     const hand = ky.handSlice(seat);
     if (pai_util.countKind(hand, pai) >= 2) return true;
@@ -308,6 +413,26 @@ pub fn seatHasClaim(ky: *const Kyoku, seat: Seat, discarder: Seat, pai: Pai, cha
                 return true;
             }
         }
+    }
+    return false;
+}
+
+/// 14 张手牌是否存在合法切牌使剩余听牌。
+fn canDeclareRiichi(ky: *const Kyoku, seat: Seat) bool {
+    const hand = ky.handSlice(seat);
+    const fuuro_len = ky.players[seat].fuuro_len;
+    var i: usize = 0;
+    while (i < hand.len) : (i += 1) {
+        const discard = hand[i];
+        if (kuikae.forbids(ky, discard)) continue;
+        var closed: [14]Pai = undefined;
+        var n: usize = 0;
+        for (hand, 0..) |p, j| {
+            if (j == i) continue;
+            closed[n] = p;
+            n += 1;
+        }
+        if (referee.isTenpai(closed[0..n], fuuro_len)) return true;
     }
     return false;
 }

@@ -19,6 +19,18 @@ pub fn initializeRound(ky: *Kyoku, out: []Event) []Event {
     clearRoundFlags(ky);
     resetPlayers(ky);
     wall.prepare(ky);
+    return finishDeal(ky, out);
+}
+
+/// 牌山已由 `loadWall` 装好：发牌开局（不洗牌）。
+pub fn initializeLoadedWall(ky: *Kyoku, out: []Event) []Event {
+    std.debug.assert(out.len >= 2);
+    clearRoundFlags(ky);
+    resetPlayers(ky);
+    return finishDeal(ky, out);
+}
+
+fn finishDeal(ky: *Kyoku, out: []Event) []Event {
     deal(ky);
     _ = wall.revealDora(ky) orelse unreachable;
 
@@ -62,17 +74,26 @@ fn resetPlayers(ky: *Kyoku) void {
     ky.drawn = null;
 }
 
+/// 发牌：从亲家起，3 轮各 4 张 + 每人 1 张（共 52）。
 fn deal(ky: *Kyoku) void {
-    var n: u8 = 0;
-    var r: u8 = 0;
-    while (r < 13) : (r += 1) {
-        var seat: u8 = 0;
-        while (seat < CAPACITY) : (seat += 1) {
-            seat_tiles.addToHand(ky, @intCast(seat), ky.yama.tiles[wall.liveTileIndex(n)]);
-            n += 1;
+    var round: u8 = 0;
+    while (round < 3) : (round += 1) {
+        var i: u8 = 0;
+        while (i < CAPACITY) : (i += 1) {
+            const seat: Seat = @intCast((@as(u8, ky.oya) + i) % CAPACITY);
+            var k: u8 = 0;
+            while (k < 4) : (k += 1) {
+                const pai = wall.drawLive(ky) orelse unreachable;
+                seat_tiles.addToHand(ky, seat, pai);
+            }
         }
     }
-    ky.yama.live_i = n;
+    var i: u8 = 0;
+    while (i < CAPACITY) : (i += 1) {
+        const seat: Seat = @intCast((@as(u8, ky.oya) + i) % CAPACITY);
+        const pai = wall.drawLive(ky) orelse unreachable;
+        seat_tiles.addToHand(ky, seat, pai);
+    }
 }
 
 fn clearRoundFlags(ky: *Kyoku) void {

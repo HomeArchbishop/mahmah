@@ -31,11 +31,11 @@ pub fn resolveDiscard(ky: *Kyoku, seat: Seat, pai: Pai, tsumogiri: bool, out: []
     }
 
     var n: usize = 0;
+    // 明杠指示：与标准实现一致，在打牌事件之前翻
+    n = kan.flushMinkanDora(ky, out, n);
+
     out[n] = .{ .dahai = .{ .actor = seat, .pai = pai, .tsumogiri = tsumogiri } };
     n += 1;
-
-    // 明杠打牌后翻杠宝牌
-    n = kan.flushMinkanDora(ky, out, n);
 
     if (ky.is_first_turn and ky.first_discards[seat] == null) {
         ky.first_discards[seat] = pai;

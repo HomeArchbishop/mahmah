@@ -9,7 +9,7 @@ const Seat = types.Seat;
 const Pai = types.Pai;
 const ApplyError = types.ApplyError;
 
-/// 暗槓は即めくり；明槓（大明・加）は打牌後。
+/// 暗槓は即めくり；明槓（大明・加）は打牌時（打牌イベント前）めくり。
 pub const DoraReveal = enum {
     immediate,
     after_discard,
@@ -43,7 +43,7 @@ pub fn resolveKan(ky: *Kyoku, actor: Seat, out: []Event, start: usize, dora: Dor
     return out[0..n];
 }
 
-/// 明杠：打牌事件后翻齐待翻指示牌（可连续明杠累加）。
+/// 明杠：下次打牌事件前翻齐待翻指示牌（可连续明杠累加）。
 pub fn flushMinkanDora(ky: *Kyoku, out: []Event, start: usize) usize {
     var n = start;
     while (ky.pending_minkan_dora > 0) {

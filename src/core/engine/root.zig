@@ -8,6 +8,7 @@ const referee = @import("referee/root.zig");
 const legal = @import("legal.zig");
 const window = @import("response_window.zig");
 const kuikae = @import("kuikae.zig");
+const wall = @import("wall.zig");
 
 const Kyoku = kyoku_mod.Kyoku;
 const Action = types.Action;
@@ -44,6 +45,14 @@ pub fn seatsNeedingAction(ky: *const Kyoku, out: []Seat) []Seat {
 /// 整盘开始：initializeRound（不推进局数）。
 pub fn onStartGame(ky: *Kyoku, out: []Event) []Event {
     return round.initializeRound(ky, out);
+}
+
+/// 装入本引擎布局的 136 张（不洗牌、不发牌）。
+pub const loadWall = wall.loadWall;
+
+/// 牌山已 `loadWall`：发牌开局。
+pub fn onStartLoadedWall(ky: *Kyoku, out: []Event) []Event {
+    return round.initializeLoadedWall(ky, out);
 }
 
 /// 落地一着：按 phase 分发。
