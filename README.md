@@ -14,9 +14,11 @@ zig build test
 
 ## 和 riichienv 做差分
 
+Python harness 在 [`harness/`](harness/)（不计入本仓库主语言）。
+
 ```bash
 zig build mjai-diff
-cd tests && uv sync
+cd harness && uv sync
 uv run python -m diff seed --seeds 5
 uv run python -m diff scenario
 uv run python -m diff all --seeds 5

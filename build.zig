@@ -56,6 +56,6 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_unit_tests.step);
 
-    const diff_step = b.step("mjai-diff", "Build mjai_diff twin for tests/diff");
+    const diff_step = b.step("mjai-diff", "Build mjai_diff twin for harness/diff");
     diff_step.dependOn(&b.addInstallArtifact(mjai_diff, .{}).step);
 }

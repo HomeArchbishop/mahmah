@@ -1,7 +1,7 @@
 [project]
-name = "mahmah-tests"
+name = "mahmah-harness"
 version = "0.0.0"
-description = "Python tooling for mahmah engine diffs against riichienv"
+description = "riichienv diff harness for mahmah (not part of the Zig server)"
 requires-python = ">=3.11"
 dependencies = [
     "riichienv>=0.1.0",

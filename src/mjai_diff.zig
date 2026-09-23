@@ -1,4 +1,4 @@
-//! MJAI 差分引擎：stdin JSONL → stdout JSONL。供 `tests/diff` 领导进程驱动。
+//! MJAI 差分引擎：stdin JSONL → stdout JSONL。供 `harness/diff` 领导进程驱动。
 //!
 //!   {"op":"start","paishan":[136 mjai],"oya":0,"bakaze":"E","kyoku":1}
 //!   {"op":"act","seat":0,"action":{"type":"dahai","pai":"1m","tsumogiri":true,"request_id":1}}
@@ -406,7 +406,7 @@ fn encodeOkState(gpa: std.mem.Allocator, ky: *Kyoku, evs: []const Event) ![]u8 {
         const json = try protocol.encodeEvent(ev, &enc_buf);
         try out.appendSlice(gpa, json);
     }
-    // 紧凑合法着键（与 tests/diff/compare.action_key 对齐），避免每步回传整表 dahai JSON
+    // 紧凑合法着键（与 harness/diff/compare.action_key 对齐），避免每步回传整表 dahai JSON
     try out.appendSlice(gpa, "],\"legal_keys\":{");
 
     var seat_buf: [CAPACITY]Seat = undefined;

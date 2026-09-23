@@ -8,7 +8,8 @@ zig-pkg/
 
 __pycache__/
 .venv/
+harness/.venv/
 *.pyc
 
 # 每次 diff 覆盖写的最新覆盖报告
-tests/diff/coverage-latest.md
+harness/diff/coverage-latest.md
