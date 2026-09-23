@@ -12,8 +12,9 @@ pub fn main(init: std.process.Init) !void {
     var conn_id_gen = ids.ConnIdGen{};
     var room_id_gen = ids.RoomIdGen{};
 
-    var room_manager = RoomManager.init(allocator);
+    var room_manager = RoomManager.init(allocator, init.io);
     defer room_manager.deinit();
+    try room_manager.startTimer();
 
     var lobby = Lobby.init(allocator, &room_manager, &room_id_gen, &player_id_gen);
     defer lobby.deinit();

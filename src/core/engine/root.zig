@@ -21,20 +21,20 @@ pub fn legalActions(ky: *const Kyoku, seat: Seat, out: []Action) []Action {
     return legal.fillLegal(ky, seat, out);
 }
 
-/// 超时代打：wait_act 优先摸切；wait_response 为 none。
+/// 超时代打：优先摸切，其次过（none）；吃碰后无摸切则打第一张可打牌。
 pub fn defaultAction(ky: *const Kyoku, seat: Seat) ?Action {
     var buf: [32]Action = undefined;
     const acts = legalActions(ky, seat, &buf);
-    if (acts.len == 0) return null;
-    if (ky.phase == .wait_response) {
-        for (acts) |a| {
-            if (a == .none) return a;
-        }
-    }
     for (acts) |a| {
         if (a == .dahai and a.dahai.tsumogiri) return a;
     }
-    return acts[0];
+    for (acts) |a| {
+        if (a == .none) return a;
+    }
+    for (acts) |a| {
+        if (a == .dahai) return a;
+    }
+    return null;
 }
 
 /// 哪些座位现在需要 request_action（写入 out）。

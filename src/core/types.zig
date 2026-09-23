@@ -43,9 +43,9 @@ pub const ResolveStatus = enum {
 
 /// 时限：grace 免费段 + bank 局内银行；deadline = grace + bank
 pub const TimeBudget = struct {
-    grace_ms: u32 = 3000,
-    bank_ms: u32 = 15000,
-    deadline_ms: u32 = 18000,
+    grace_ms: u32 = 5000,
+    bank_ms: u32 = 20000,
+    deadline_ms: u32 = 25000,
 };
 
 /// 「请你出招」——Room 据此发 request_action 并挂定时器
@@ -59,22 +59,23 @@ pub const ActionRequest = struct {
     observation: ?[]const u8 = null,
 };
 
-/// 「你的回复已处理」——Room 编成 action_ack
+/// 「你的回复已处理」——Room 编成 action_ack（只发给 `seat`）
 pub const ActionResolved = struct {
+    seat: Seat,
     request_id: u32,
     status: ResolveStatus,
-    /// defaulted（及需要回声时）的实际着法 → JSON `action`
+    /// defaulted 时代打着法 → JSON `action`
     action: ?Action = null,
     /// rejected 时的非法着 → JSON `attempted`
     attempted: ?Action = null,
-    /// rejected / unparseable
+    /// rejected
     reason: ?[]const u8 = null,
     /// rejected 时当时合法 type 名
     legal_types: ?[]const []const u8 = null,
     /// 墙钟（room 可覆盖；编码时始终写出）
     elapsed_ms: u32 = 0,
     bank_consumed_ms: u32 = 0,
-    bank_ms: u32 = 15000,
+    bank_ms: u32 = 20000,
 };
 
 /// 已发生事实（下行）。Room 只消费 Event，不碰 Kyoku。

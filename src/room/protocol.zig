@@ -238,11 +238,6 @@ fn encodeActionResolved(r: types.ActionResolved, buf: []u8) ![]const u8 {
             try append(buf, &pos, "]");
         }
     }
-    if (r.status == .unparseable) {
-        if (r.reason) |reason| {
-            try appendFmt(buf, &pos, ",\"reason\":\"{s}\"", .{reason});
-        }
-    }
     try append(buf, &pos, "}");
     return buf[0..pos];
 }
@@ -418,6 +413,7 @@ test "mask tsumo for other seats" {
 
 test "action_ack rejected uses attempted" {
     const ev: Event = .{ .action_resolved = .{
+        .seat = 0,
         .request_id = 1,
         .status = .rejected,
         .attempted = .{ .dahai = .{ .pai = "9m" } },

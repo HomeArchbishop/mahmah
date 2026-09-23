@@ -18,6 +18,11 @@ const Pending = struct {
     seat: types.Seat,
 };
 
+pub const PendingRef = struct {
+    request_id: u32,
+    seat: types.Seat,
+};
+
 /// 对局会话门面：GamePhase、pending、拼 Outcome。
 pub const Desk = struct {
     players: [CAPACITY]ids.PlayerId,
@@ -62,10 +67,11 @@ pub const Desk = struct {
 
     pub fn onAction(self: *Desk, player_id: ids.PlayerId, request_id: u32, action: types.Action) !types.Outcome {
         self.clearEvents();
-        const slot = self.requirePending(request_id) orelse return self.outcome();
+        const actor_seat = self.seatOf(player_id);
+        const slot = self.requirePending(request_id, actor_seat) orelse return self.outcome();
         const pending = self.pendings[slot].?;
 
-        const seat = self.seatOf(player_id) orelse {
+        const seat = actor_seat orelse {
             return self.reject(slot, pending.seat, request_id, .rejected, action);
         };
         if (seat != pending.seat) {
@@ -83,34 +89,54 @@ pub const Desk = struct {
 
     pub fn onUnparseable(self: *Desk, player_id: ids.PlayerId, request_id: u32) !types.Outcome {
         self.clearEvents();
-        const slot = self.requirePending(request_id) orelse return self.outcome();
-        const pending = self.pendings[slot].?;
-        const seat = self.seatOf(player_id) orelse pending.seat;
-        return self.reject(slot, seat, request_id, .unparseable, null);
+        const seat = self.seatOf(player_id) orelse return self.outcome();
+        // 丢掉，不动 pending；只回一条解析失败 ack
+        self.push(.{ .action_resolved = .{
+            .seat = seat,
+            .request_id = request_id,
+            .status = .unparseable,
+        } });
+        return self.outcome();
     }
 
     pub fn onTimeout(self: *Desk, request_id: u32) !types.Outcome {
         self.clearEvents();
-        const slot = self.requirePending(request_id) orelse return self.outcome();
-        const pending = self.pendings[slot].?;
+        const slot = self.requirePending(request_id, null) orelse return self.outcome();
+        return self.applyDefault(slot, request_id, .defaulted);
+    }
 
+    /// 代打：摸切 / 过。用于超时（不罚分）。
+    fn applyDefault(self: *Desk, slot: usize, request_id: u32, status: types.ResolveStatus) types.Outcome {
+        const pending = self.pendings[slot].?;
         const action = engine.defaultAction(&self.kyoku, pending.seat) orelse {
-            return self.reject(slot, pending.seat, request_id, .rejected, null);
+            const budget = types.TimeBudget{};
+            self.pendings[slot] = null;
+            self.push(.{ .action_resolved = .{
+                .seat = pending.seat,
+                .request_id = request_id,
+                .status = status,
+                .elapsed_ms = budget.deadline_ms,
+                .bank_consumed_ms = budget.bank_ms,
+                .bank_ms = 0,
+            } });
+            return self.outcome();
         };
         const produced = engine.apply(&self.kyoku, pending.seat, action, &self.apply_buf) catch {
             return self.reject(slot, pending.seat, request_id, .rejected, null);
         };
-        return self.accept(slot, request_id, .defaulted, action, produced);
+        return self.accept(slot, request_id, status, action, produced);
     }
 
-    /// 返回 pendings 下标；无效则已推 stale。
-    fn requirePending(self: *Desk, request_id: u32) ?usize {
+    /// 返回 pendings 下标；无效则向 `ack_seat` 推 stale（无座位则静默丢弃）。
+    fn requirePending(self: *Desk, request_id: u32, ack_seat: ?types.Seat) ?usize {
         for (self.pendings, 0..) |p, i| {
             if (p) |pending| {
                 if (pending.request_id == request_id) return i;
             }
         }
-        self.push(.{ .action_resolved = .{ .request_id = request_id, .status = .stale } });
+        if (ack_seat) |seat| {
+            self.push(.{ .action_resolved = .{ .seat = seat, .request_id = request_id, .status = .stale } });
+        }
         return null;
     }
 
@@ -123,11 +149,14 @@ pub const Desk = struct {
         produced: []const types.Event,
     ) types.Outcome {
         const budget = types.TimeBudget{};
+        const seat = self.pendings[slot].?.seat;
         self.pendings[slot] = null;
         self.push(.{ .action_resolved = .{
+            .seat = seat,
             .request_id = request_id,
             .status = status,
             .action = if (status == .defaulted) defaulted_action else null,
+            .elapsed_ms = if (status == .defaulted) budget.deadline_ms else 0,
             .bank_consumed_ms = if (status == .defaulted) budget.bank_ms else 0,
             .bank_ms = if (status == .defaulted) 0 else budget.bank_ms,
         } });
@@ -151,6 +180,7 @@ pub const Desk = struct {
         self.clearAllPendings();
         const reason = engine.chomboReason(&self.reason_buf, seat);
         self.push(.{ .action_resolved = .{
+            .seat = seat,
             .request_id = request_id,
             .status = status,
             .attempted = attempted,
@@ -274,6 +304,19 @@ pub const Desk = struct {
         }
         return null;
     }
+
+    /// Room 挂超时用：当前仍在等回复的 request。
+    pub fn listPendings(self: *const Desk, out: []PendingRef) []PendingRef {
+        var n: usize = 0;
+        for (self.pendings) |p| {
+            if (p) |pending| {
+                if (n >= out.len) break;
+                out[n] = .{ .request_id = pending.request_id, .seat = pending.seat };
+                n += 1;
+            }
+        }
+        return out[0..n];
+    }
 };
 
 test "desk beginGame then dahai" {
@@ -343,13 +386,47 @@ test "desk timeout defaults" {
 
     const out = try desk.onTimeout(rid);
     var saw_defaulted = false;
+    var saw_tsumogiri = false;
     for (out.events) |ev| {
         switch (ev) {
             .action_resolved => |r| {
-                if (r.status == .defaulted) saw_defaulted = true;
+                if (r.status == .defaulted) {
+                    saw_defaulted = true;
+                    if (r.action) |a| {
+                        if (a == .dahai and a.dahai.tsumogiri) saw_tsumogiri = true;
+                    }
+                }
             },
             else => {},
         }
     }
     try std.testing.expect(saw_defaulted);
+    try std.testing.expect(saw_tsumogiri);
+}
+
+test "desk unparseable discards without applying" {
+    const players = [_]u64{ 1, 2, 3, 4 };
+    var desk = Desk.init(&players);
+    _ = try desk.beginGame();
+    const rid = desk.anyPending().?.request_id;
+
+    const out = try desk.onUnparseable(1, rid);
+    var saw_unparseable = false;
+    var saw_dahai = false;
+    var saw_ryukyoku = false;
+    for (out.events) |ev| {
+        switch (ev) {
+            .action_resolved => |r| {
+                if (r.status == .unparseable) saw_unparseable = true;
+            },
+            .dahai => saw_dahai = true,
+            .ryukyoku => saw_ryukyoku = true,
+            else => {},
+        }
+    }
+    try std.testing.expect(saw_unparseable);
+    try std.testing.expect(!saw_dahai);
+    try std.testing.expect(!saw_ryukyoku);
+    try std.testing.expect(desk.anyPending() != null);
+    try std.testing.expectEqual(rid, desk.anyPending().?.request_id);
 }
