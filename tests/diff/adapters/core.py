@@ -9,7 +9,8 @@ from typing import Any
 
 
 def default_mjai_diff_path() -> Path:
-    root = Path(__file__).resolve().parents[2]
+    # tests/diff/adapters/core.py → repo root
+    root = Path(__file__).resolve().parents[3]
     exe = "mjai_diff.exe" if os.name == "nt" else "mjai_diff"
     return root / "zig-out" / "bin" / exe
 

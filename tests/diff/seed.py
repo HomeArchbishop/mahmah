@@ -1,4 +1,4 @@
-"""领导进程：同一牌山驱动两边；比合法集 + 事件；半庄多局。"""
+"""seed 入口：随机牌山半庄差分；比合法集 + 事件。"""
 from __future__ import annotations
 
 import argparse
@@ -6,18 +6,17 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .adapters import CoreEngine, RiichiEngine, default_mjai_diff_path, make_wall, wall_to_mjai
 from .compare import (
     events_equal,
     legal_key_sets_equal,
     strip_after_kyoku_end,
 )
-from .core_adapter import CoreEngine, default_mjai_diff_path
 from .coverage import (
     tags_from_events,
     tags_from_yaku_ids,
     write_latest_report,
 )
-from .riichi_adapter import RiichiEngine, make_wall, wall_to_mjai
 
 RETURN_SCORE = 30000
 

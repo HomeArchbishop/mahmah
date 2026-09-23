@@ -16,7 +16,7 @@ import yaml
 
 from riichienv import ActionType
 
-from .riichi_adapter import RiichiEngine, make_wall
+from .adapters import RiichiEngine, make_wall
 
 CHECKLIST_PATH = Path(__file__).with_name("checklist.yaml")
 LATEST_PATH = Path(__file__).with_name("coverage-latest.md")
@@ -246,7 +246,7 @@ def _renchan_after(table, events: list[dict[str, Any]]) -> bool:
 
 
 def _advance_table(table, *, renchan: bool):
-    from .leader import Table, should_end_hanchan
+    from .seed import Table, should_end_hanchan
 
     if should_end_hanchan(table, renchan=renchan):
         return None
@@ -279,7 +279,7 @@ def _advance_table(table, *, renchan: bool):
 
 def collect_seed_tags(seed: int) -> set[str]:
     """跑 oracle 半庄，返回事件标签 + 役种标签（不差分，供 scan）。"""
-    from .leader import (
+    from .seed import (
         Table,
         apply_score_events,
         filter_game_events,

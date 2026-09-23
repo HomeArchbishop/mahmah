@@ -86,6 +86,7 @@ fn yakuStandard(ky: *const Kyoku, seat: Seat, tsumo: bool, decomp: Decomp) YakuC
     add(&total, ikkitsutokan(ky, seat, tsumo, decomp));
     add(&total, toitoihoo(ky, seat, tsumo, decomp));
     add(&total, sanankoo(ky, seat, tsumo, decomp));
+    add(&total, sankantsu(ky, seat, tsumo, decomp));
     add(&total, honchantaiyaochuu(ky, seat, tsumo, decomp));
     add(&total, junchantaiyaochuu(ky, seat, tsumo, decomp));
     add(&total, honroutoo(ky, seat, tsumo, decomp));
@@ -429,6 +430,18 @@ fn sanankoo(ky: *const Kyoku, seat: Seat, tsumo: bool, decomp: Decomp) ?YakuCoun
     _ = seat;
     _ = tsumo;
     if (ankouCount(decomp) == 3) return .{ .han = 2 };
+    return null;
+}
+
+fn sankantsu(ky: *const Kyoku, seat: Seat, tsumo: bool, decomp: Decomp) ?YakuCount {
+    _ = ky;
+    _ = seat;
+    _ = tsumo;
+    var n: u8 = 0;
+    for (decomp.blocks) |b| {
+        if (b.kind == .kantsu) n += 1;
+    }
+    if (n == 3) return .{ .han = 2 };
     return null;
 }
 

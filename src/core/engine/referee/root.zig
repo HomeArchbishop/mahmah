@@ -62,8 +62,22 @@ pub fn canKokushiRon(ky: *const Kyoku, seat: Seat) bool {
     return special.detectSpecialForm(ky, seat, false) == .kokushi;
 }
 
-/// 取最高点的和了番符（多拆解取基本点最大）。
+/// 取最高点的和了番符（多拆解取基本点最大；七对/国士与标准型也比）。
 pub fn evaluateHora(ky: *const Kyoku, seat: Seat, tsumo: bool) HoraValue {
+    var best: HoraValue = .{};
+    var best_bp: u32 = 0;
+
+    const consider = struct {
+        fn f(dst: *HoraValue, dst_bp: *u32, cand: HoraValue, kiriage: bool) void {
+            if (cand.yakuman == 0 and cand.han == 0) return;
+            const bp = points.basicPoints(cand.han, cand.fu, cand.yakuman, kiriage);
+            if (bp > dst_bp.*) {
+                dst_bp.* = bp;
+                dst.* = cand;
+            }
+        }
+    }.f;
+
     if (special.detectSpecialForm(ky, seat, tsumo)) |form| {
         const yform: yaku.Form = switch (form) {
             .chiitoi => .chiitoi,
@@ -75,23 +89,18 @@ pub fn evaluateHora(ky: *const Kyoku, seat: Seat, tsumo: bool) HoraValue {
             .kokushi => .kokushi,
         };
         const fu_n = fu.countFu(ky, seat, tsumo, fform, .{});
-        return .{ .han = y.han, .yakuman = y.yakuman, .fu = fu_n };
+        consider(&best, &best_bp, .{ .han = y.han, .fu = fu_n, .yakuman = y.yakuman }, ky.rules.kiriage_mangan);
+        // 国士无标准拆；七对可能与二杯口等标准形并存，继续比
+        if (form == .kokushi) return best;
     }
 
-    var best: HoraValue = .{};
-    var best_bp: u32 = 0;
     var decomps_buf: [64]standard.StandardDecomp = undefined;
     const decomps = standard.standardDecomps(ky, seat, tsumo, &decomps_buf);
     for (decomps) |decomp| {
         const y = yaku.countYaku(ky, seat, tsumo, .standard, decomp);
         if (y.yakuman == 0 and y.han == 0) continue;
         const fu_n = fu.countFu(ky, seat, tsumo, .standard, decomp);
-        const cand: HoraValue = .{ .han = y.han, .fu = fu_n, .yakuman = y.yakuman };
-        const bp = points.basicPoints(cand.han, cand.fu, cand.yakuman, ky.rules.kiriage_mangan);
-        if (bp > best_bp) {
-            best_bp = bp;
-            best = cand;
-        }
+        consider(&best, &best_bp, .{ .han = y.han, .fu = fu_n, .yakuman = y.yakuman }, ky.rules.kiriage_mangan);
     }
     return best;
 }
