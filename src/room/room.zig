@@ -159,6 +159,11 @@ pub const Room = struct {
         if (self.desk.game_phase != .awaiting_players) return;
         if (!self.allSeatsConnected()) return;
 
+        // 对局牌山：用系统熵作洗牌种子（局间再 +1）
+        var seed: u64 = undefined;
+        self.io.random(std.mem.asBytes(&seed));
+        self.desk.kyoku.shuffle_seed = seed;
+
         const outcome = try self.desk.beginGame();
         try self.recordCatchUp(outcome);
         try self.deliverOutcome(outcome);
