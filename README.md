@@ -34,4 +34,4 @@ bunx vite .
 
 ## License
 
-PolyForm Noncommercial License 1.0.0
+[Apache License 2.0](LICENSE)
