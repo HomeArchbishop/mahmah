@@ -9,7 +9,7 @@ pub fn build(b: *std.Build) void {
     const websocket_module = httpz_dep.builder.dependency("websocket", dep_opts).module("websocket");
 
     const exe = b.addExecutable(.{
-        .name = "zig",
+        .name = "mahmah",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,

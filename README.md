@@ -32,6 +32,20 @@ bun i
 bunx vite .
 ```
 
+## Release
+
+打 `v*` 标签会触发 GitHub Actions：交叉编译并上传各平台包。
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+产物（GitHub Release 均上传）：
+
+- 压缩包 `mahmah-<version>-<os>-<arch>.{tar.gz|zip}`：二进制 + `LICENSE` + `README.md` + `docs/{lobby,room}.md`
+- 单独二进制 `mahmah-<version>-<os>-<arch>[.exe]`
+
 ## License
 
 [Apache License 2.0](LICENSE)

@@ -1,0 +1,145 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version tag to publish (e.g. v0.1.0); leave empty to build without GitHub Release"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+env:
+  ZIG_VERSION: "0.16.0"
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            target: x86_64-linux-musl
+            artifact: mahmah
+            archive: tar.gz
+          - name: linux-aarch64
+            target: aarch64-linux-musl
+            artifact: mahmah
+            archive: tar.gz
+          - name: macos-x86_64
+            target: x86_64-macos
+            artifact: mahmah
+            archive: tar.gz
+          - name: macos-aarch64
+            target: aarch64-macos
+            artifact: mahmah
+            archive: tar.gz
+          - name: windows-x86_64
+            target: x86_64-windows
+            artifact: mahmah.exe
+            archive: zip
+          - name: windows-aarch64
+            target: aarch64-windows
+            artifact: mahmah.exe
+            archive: zip
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            V="${GITHUB_REF_NAME#v}"
+          elif [[ -n "${{ inputs.tag }}" ]]; then
+            V="${{ inputs.tag }}"
+            V="${V#v}"
+          else
+            V="0.0.0-${GITHUB_SHA::7}"
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "asset=mahmah-${V}-${{ matrix.name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        run: zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.target }}
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          ASSET="${{ steps.ver.outputs.asset }}"
+          ARTIFACT="${{ matrix.artifact }}"
+          STAGE="dist/pkg/${ASSET}"
+          mkdir -p "$STAGE/docs"
+          cp "zig-out/bin/${ARTIFACT}" "$STAGE/"
+          cp LICENSE README.md "$STAGE/"
+          cp docs/lobby.md docs/room.md "$STAGE/docs/"
+          # 单独二进制（与压缩包同级，带平台后缀）
+          if [[ "$ARTIFACT" == *.exe ]]; then
+            cp "zig-out/bin/${ARTIFACT}" "dist/${ASSET}.exe"
+          else
+            cp "zig-out/bin/${ARTIFACT}" "dist/${ASSET}"
+          fi
+          if [[ "${{ matrix.archive }}" == "zip" ]]; then
+            (cd dist/pkg && zip -r "../${ASSET}.zip" "${ASSET}")
+          else
+            tar -C dist/pkg -czf "dist/${ASSET}.tar.gz" "${ASSET}"
+          fi
+          rm -rf dist/pkg
+          ls -la dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.ver.outputs.asset }}
+          path: dist/${{ steps.ver.outputs.asset }}*
+          if-no-files-found: error
+
+  publish:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve tag
+        id: tag
+        shell: bash
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+          else
+            T="${{ inputs.tag }}"
+            [[ "$T" == v* ]] || T="v$T"
+            echo "tag=$T" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List assets
+        run: find artifacts -type f | sort
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: ${{ steps.tag.outputs.tag }}
+          draft: false
+          generate_release_notes: true
+          files: artifacts/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
