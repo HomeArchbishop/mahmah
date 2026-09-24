@@ -121,6 +121,8 @@ pub const Event = union(enum) {
         ura_markers: [DORA_MARKER_CAP]Pai = undefined,
         ura_markers_len: u8 = 0,
         tsumo: bool,
+        /// 局终亮牌（MJAI 拓展）：和了者手牌可见，其余座位为 `"?"`
+        tehais: ?Tehais = null,
     },
 
     ryukyoku: struct {

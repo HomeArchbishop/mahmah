@@ -19,7 +19,7 @@ pub fn applyWaitAct(ky: *Kyoku, seat: Seat, action: Action, out: []Event) ApplyE
         .dahai => |d| discard.resolveDiscard(ky, seat, d.pai, d.tsumogiri, out),
         .reach => discard.applyReach(ky, seat, out),
         .hora => hora.applyTsumo(ky, seat, out),
-        .ryukyoku => ryuukyoku.applyKyushu(ky, out),
+        .ryukyoku => ryuukyoku.applyKyushu(ky, seat, out),
         .ankan => |a| kan.applyAnkan(ky, seat, a.consumed, out),
         .kakan => |a| kan.applyKakan(ky, seat, a.pai, a.consumed, out),
         else => error.IllegalAction,

@@ -75,19 +75,25 @@ fn fourRiichi(ky: *const Kyoku) bool {
     return true;
 }
 
-/// 九种九牌流局（0 点；本场 +1；不连庄）。
-pub fn applyKyushu(ky: *Kyoku, out: []Event) ApplyError![]Event {
+/// 九种九牌流局（0 点；本场 +1；不连庄）。亮申报者手牌。
+pub fn applyKyushu(ky: *Kyoku, seat: types.Seat, out: []Event) ApplyError![]Event {
     if (!ky.rules.abort_kyushu) return error.IllegalAction;
     if (!ky.is_first_turn) return error.IllegalAction;
+    var reveal: [CAPACITY]bool = .{false} ** CAPACITY;
+    reveal[seat] = true;
     var n: usize = 0;
-    out[n] = .{ .ryukyoku = .{ .reason = "kyushu_kyuhai", .deltas = .{ 0, 0, 0, 0 } } };
+    out[n] = .{ .ryukyoku = .{
+        .reason = "kyushu_kyuhai",
+        .deltas = .{ 0, 0, 0, 0 },
+        .tehais = ky.tehaisReveal(reveal),
+    } };
     n += 1;
     ky.honba += 1;
     return round.afterKyokuEnd(ky, out, n);
 }
 
 /// 荒牌流局：有流满则按自摸满贯结算并跳过听牌罚符；否则听牌/不听。
-/// 供托保留；本场 +1；亲听牌或亲流满则连庄。
+/// 供托保留；本场 +1；亲听牌或亲流满则连庄。听牌（及流满）座位亮牌。
 pub fn applyHowanpai(ky: *Kyoku, out: []Event, start: usize) []Event {
     var nagashi: [CAPACITY]bool = .{false} ** CAPACITY;
     var tenpai: [CAPACITY]bool = .{false} ** CAPACITY;
@@ -136,8 +142,18 @@ pub fn applyHowanpai(ky: *Kyoku, out: []Event, start: usize) []Event {
     const renchan = tenpai[ky.oya] or nagashi[ky.oya];
     ky.honba += 1;
 
+    var reveal: [CAPACITY]bool = .{false} ** CAPACITY;
+    s = 0;
+    while (s < CAPACITY) : (s += 1) {
+        reveal[s] = tenpai[s] or nagashi[s];
+    }
+
     var n = start;
-    out[n] = .{ .ryukyoku = .{ .reason = "exhaustive_draw", .deltas = wire_deltas } };
+    out[n] = .{ .ryukyoku = .{
+        .reason = "exhaustive_draw",
+        .deltas = wire_deltas,
+        .tehais = ky.tehaisReveal(reveal),
+    } };
     n += 1;
     return round.afterKyokuEndRenchan(ky, out, n, renchan);
 }

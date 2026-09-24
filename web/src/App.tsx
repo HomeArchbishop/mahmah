@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 
 import { findDahaiAction } from './board/applyEvent'
 import { BoardView } from './components/BoardView'
@@ -17,6 +17,7 @@ function btnClass (enabled: boolean) {
 
 export default function App () {
   const s = useTestSession()
+  const [joinId, setJoinId] = useState('')
 
   const playable = useMemo(() => {
     const set = new Set<Pai>()
@@ -37,13 +38,16 @@ export default function App () {
 
   const waitingHint =
     s.phase === 'room' && !s.pending
-      ? '等待其他座位（bot 无自动出牌时会停在此；服务端超时未接线）'
+      ? '等待其他座位（超时会摸切/过）'
       : s.phase === 'lobby'
-        ? '在 lobby 开桌后进入对局'
+        ? s.roomId != null
+          ? (s.isHost ? '房主：加 bot 或等人满后开局' : '等待房主开局…')
+          : '创建房间或输入 room_id 加入'
         : null
 
   const lobbyOk = s.lobbyConnected
   const inLobby = s.phase === 'lobby' && lobbyOk
+  const hostOk = inLobby && s.isHost && s.roomId != null
 
   return (
     <div className='flex min-h-screen flex-col bg-table text-gray-300'>
@@ -54,6 +58,11 @@ export default function App () {
           <span>{s.status}</span>
           {s.playerId != null && <span>player {s.playerId}</span>}
           {s.roomId != null && <span>room {s.roomId}</span>}
+          {s.roomId != null && (
+            <span className={s.isHost ? 'text-amber-600' : 'text-gray-600'}>
+              {s.isHost ? 'host' : 'guest'}
+            </span>
+          )}
           {s.roomId != null && <span>席位 {s.occupied}/4（bot {s.bots}）</span>}
         </div>
         <div className='flex flex-wrap items-center gap-1.5'>
@@ -62,27 +71,49 @@ export default function App () {
           </button>
           <button
             type='button'
-            className={btnClass(inLobby && !s.busy)}
-            disabled={!inLobby || s.busy}
+            className={btnClass(inLobby && !s.busy && s.roomId == null)}
+            disabled={!inLobby || s.busy || s.roomId != null}
             onClick={() => { void s.quickStart() }}
           >
             一键开桌
           </button>
-          <button type='button' className={btnClass(inLobby)} disabled={!inLobby} onClick={s.createRoom}>
+          <button
+            type='button'
+            className={btnClass(inLobby && s.roomId == null)}
+            disabled={!inLobby || s.roomId != null}
+            onClick={s.createRoom}
+          >
             创建
+          </button>
+          <input
+            type='text'
+            inputMode='numeric'
+            placeholder='room id'
+            value={joinId}
+            onChange={(e) => setJoinId(e.target.value)}
+            className='w-16 rounded border border-gray-800 bg-transparent px-1.5 py-1 text-[0.7rem] text-gray-300 outline-none placeholder:text-gray-700 focus:border-gray-600'
+            disabled={!inLobby || s.roomId != null}
+          />
+          <button
+            type='button'
+            className={btnClass(inLobby && s.roomId == null && joinId.trim() !== '')}
+            disabled={!inLobby || s.roomId != null || joinId.trim() === ''}
+            onClick={() => s.joinRoom(Number(joinId.trim()))}
+          >
+            加入
           </button>
           <button
             type='button'
-            className={btnClass(inLobby && s.roomId != null && s.occupied < 4)}
-            disabled={!inLobby || s.roomId == null || s.occupied >= 4}
+            className={btnClass(hostOk && s.occupied < 4)}
+            disabled={!hostOk || s.occupied >= 4}
             onClick={s.addBot}
           >
             加 Bot
           </button>
           <button
             type='button'
-            className={btnClass(inLobby && s.roomId != null && s.occupied >= 4)}
-            disabled={!inLobby || s.roomId == null || s.occupied < 4}
+            className={btnClass(hostOk && s.occupied >= 4)}
+            disabled={!hostOk || s.occupied < 4}
             onClick={s.startGame}
           >
             开始

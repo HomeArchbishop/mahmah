@@ -6,6 +6,17 @@ import type { BoardSnapshot, LogEntry, PendingRequest, Phase, WireAction } from 
 
 const CAPACITY = 4
 
+/** bot id 最高位为 1；JSON 解析后仍远大于 MAX_SAFE_INTEGER */
+function isBotPlayerId (id: unknown): boolean {
+  return typeof id === 'number' && Number.isFinite(id) && id > Number.MAX_SAFE_INTEGER
+}
+
+function memberKey (id: unknown): string | null {
+  if (typeof id === 'number' && Number.isFinite(id)) return String(id)
+  if (typeof id === 'string' && id.length > 0) return id
+  return null
+}
+
 let logSeq = 0
 
 function pushLog (
@@ -24,7 +35,8 @@ export function useTestSession () {
   const [phase, setPhase] = useState<Phase>('idle')
   const [playerId, setPlayerId] = useState<number | null>(null)
   const [roomId, setRoomId] = useState<number | null>(null)
-  const [bots, setBots] = useState(0)
+  const [isHost, setIsHost] = useState(false)
+  const [members, setMembers] = useState<string[]>([])
   const [lobbyConnected, setLobbyConnected] = useState(false)
   const [roomConnected, setRoomConnected] = useState(false)
   const [board, setBoard] = useState<BoardSnapshot>(emptyBoard)
@@ -38,12 +50,10 @@ export function useTestSession () {
   const reqIdRef = useRef(1)
   const playerIdRef = useRef<number | null>(null)
   const roomIdRef = useRef<number | null>(null)
-  const botsRef = useRef(0)
   const meSeatRef = useRef(0)
 
   useEffect(() => { playerIdRef.current = playerId }, [playerId])
   useEffect(() => { roomIdRef.current = roomId }, [roomId])
-  useEffect(() => { botsRef.current = bots }, [bots])
   useEffect(() => { meSeatRef.current = board.meSeat }, [board.meSeat])
 
   const nextReq = () => {
@@ -51,6 +61,24 @@ export function useTestSession () {
     reqIdRef.current += 1
     return id
   }
+
+  const resetTable = useCallback(() => {
+    setRoomId(null)
+    setIsHost(false)
+    setMembers([])
+  }, [])
+
+  const addMember = useCallback((id: unknown) => {
+    const key = memberKey(id)
+    if (key == null) return
+    setMembers((prev) => (prev.includes(key) ? prev : [...prev, key]))
+  }, [])
+
+  const removeMember = useCallback((id: unknown) => {
+    const key = memberKey(id)
+    if (key == null) return
+    setMembers((prev) => prev.filter((m) => m !== key))
+  }, [])
 
   const sendLobby = useCallback((obj: Record<string, unknown>) => {
     const ws = lobbyRef.current
@@ -145,18 +173,30 @@ export function useTestSession () {
         break
       case 'room_created':
         setRoomId(msg.room_id as number)
-        setBots(0)
+        setIsHost(msg.is_host === true)
+        setMembers([])
         setStatus(`已创建 room ${msg.room_id as number}`)
         break
-      case 'room_joined':
-        setRoomId(msg.room_id as number)
-        setStatus(`已加入 room ${msg.room_id as number}`)
+      case 'room_joined': {
+        const rid = msg.room_id as number
+        setRoomId(rid)
+        setIsHost(msg.is_host === true)
+        const selfId = playerIdRef.current
+        if (selfId != null) addMember(selfId)
+        setStatus(`${msg.is_host === true ? '房主' : '成员'} · room ${rid}`)
+        break
+      }
+      case 'member_joined':
+        if (typeof msg.is_host === 'boolean') setIsHost(msg.is_host)
+        addMember(msg.player_id)
+        break
+      case 'member_left':
+        if (typeof msg.is_host === 'boolean') setIsHost(msg.is_host)
+        removeMember(msg.player_id)
         break
       case 'bot_added':
-        setBots((n) => n + 1)
-        break
       case 'bot_removed':
-        setBots((n) => Math.max(0, n - 1))
+        // 席位以 member_joined / member_left 为准，避免与推送重复计数
         break
       case 'game_started': {
         const rid = (msg.room_id as number | undefined) ?? roomIdRef.current
@@ -175,15 +215,14 @@ export function useTestSession () {
       default:
         break
     }
-  }, [closeLobby, connectRoom])
+  }, [addMember, closeLobby, connectRoom, removeMember])
 
   const connectLobby = useCallback(() => {
     closeLobby()
     closeRoom()
     setBoard(emptyBoard())
     setPending(null)
-    setRoomId(null)
-    setBots(0)
+    resetTable()
     setPhase('lobby')
     const url = wsUrl('/ws/lobby')
     pushLog(setLogs, 'sys', 'ui', `连接 lobby ${url}`)
@@ -201,7 +240,7 @@ export function useTestSession () {
     }
     ws.onerror = () => pushLog(setLogs, 'sys', 'lobby', 'lobby WebSocket error')
     ws.onmessage = (ev) => handleLobbyMessage(String(ev.data))
-  }, [closeLobby, closeRoom, handleLobbyMessage, phase])
+  }, [closeLobby, closeRoom, handleLobbyMessage, phase, resetTable])
 
   useEffect(() => {
     if (!lobbyConnected) return
@@ -218,6 +257,14 @@ export function useTestSession () {
 
   const createRoom = useCallback(() => {
     sendLobby({ type: 'create_room', request_id: nextReq() })
+  }, [sendLobby])
+
+  const joinRoom = useCallback((rid: number) => {
+    if (!Number.isFinite(rid) || rid <= 0) {
+      setStatus('请输入有效 room_id')
+      return
+    }
+    sendLobby({ type: 'join_room', request_id: nextReq(), room_id: rid })
   }, [sendLobby])
 
   const addBot = useCallback(() => {
@@ -276,13 +323,12 @@ export function useTestSession () {
       const rid = created.room_id as number
       setRoomId(rid)
       roomIdRef.current = rid
+      setIsHost(created.is_host === true)
 
       for (let i = 0; i < CAPACITY - 1; i++) {
         sendLobby({ type: 'add_bot', request_id: nextReq(), room_id: rid })
         await waitType(['bot_added'])
       }
-      setBots(CAPACITY - 1)
-      botsRef.current = CAPACITY - 1
 
       sendLobby({ type: 'start_game', request_id: nextReq(), room_id: rid })
       // game_started 由 handleLobbyMessage 切 room
@@ -304,12 +350,14 @@ export function useTestSession () {
     sendRoom(payload)
   }, [pending, sendRoom])
 
-  const occupied = (roomId != null ? 1 + bots : 0)
+  const bots = members.filter((m) => isBotPlayerId(Number(m))).length
+  const occupied = roomId != null ? members.length : 0
 
   return {
     phase,
     playerId,
     roomId,
+    isHost,
     bots,
     occupied,
     lobbyConnected,
@@ -321,6 +369,7 @@ export function useTestSession () {
     status,
     connectLobby,
     createRoom,
+    joinRoom,
     addBot,
     startGame,
     quickStart,
@@ -328,6 +377,7 @@ export function useTestSession () {
     closeAll: () => {
       closeLobby()
       closeRoom()
+      resetTable()
       setPhase('idle')
       setStatus('已断开')
     },

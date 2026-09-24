@@ -17,6 +17,9 @@ def _sort_tehais(tehais: list[list[str]] | None) -> list[list[str]] | None:
 def normalize_event(ev: dict[str, Any]) -> dict[str, Any]:
     e = copy.deepcopy(ev)
     e.pop("id", None)
+    # hora / ryukyoku.tehais 为本仓库 MJAI 拓展，oracle（riichienv）无此字段
+    if e.get("type") in ("hora", "ryukyoku"):
+        e.pop("tehais", None)
     if "tehais" in e:
         e["tehais"] = _sort_tehais(e["tehais"])
     if "consumed" in e and isinstance(e["consumed"], list):

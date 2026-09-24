@@ -109,6 +109,8 @@ fn makeHoraEvent(
         const slice = wall.fillUraMarkers(ky, &ura);
         ura_len = @intCast(slice.len);
     }
+    var reveal: [CAPACITY]bool = .{false} ** CAPACITY;
+    reveal[actor] = true;
     return .{ .hora = .{
         .actor = actor,
         .target = target,
@@ -117,6 +119,7 @@ fn makeHoraEvent(
         .ura_markers = ura,
         .ura_markers_len = ura_len,
         .tsumo = tsumo,
+        .tehais = ky.tehaisReveal(reveal),
     } };
 }
 

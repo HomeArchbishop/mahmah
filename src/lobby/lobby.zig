@@ -146,7 +146,8 @@ pub const Lobby = struct {
         try self.tables.put(room_id, Table.init(room_id, player_id));
         errdefer _ = self.tables.remove(room_id);
         try self.player_table.put(player_id, room_id);
-        try self.sendRoomCreated(sender, request_id, room_id);
+        try self.sendRoomCreated(sender, request_id, room_id, true);
+        try self.sendRoomJoined(sender, request_id, room_id, true);
     }
 
     fn handleJoinRoom(self: *Lobby, player_id: ids.PlayerId, sender: Sender, request_id: u32, room_id: ids.RoomId) !void {
@@ -160,7 +161,8 @@ pub const Lobby = struct {
             return self.sendErr(sender, request_id, mapErr(err));
         };
         try self.player_table.put(player_id, room_id);
-        try self.sendRoomJoined(sender, request_id, room_id);
+        try self.sendRoomJoined(sender, request_id, room_id, table.isHost(player_id));
+        try self.broadcastMemberJoined(room_id, player_id);
     }
 
     fn handleAddBot(self: *Lobby, player_id: ids.PlayerId, sender: Sender, request_id: u32, room_id: ids.RoomId) !void {
@@ -172,6 +174,7 @@ pub const Lobby = struct {
             return self.sendErr(sender, request_id, mapErr(err));
         };
         try self.sendBotAdded(sender, request_id, room_id, bot_id);
+        try self.broadcastMemberJoined(room_id, bot_id);
     }
 
     fn handleRemoveBot(
@@ -189,6 +192,7 @@ pub const Lobby = struct {
             return self.sendErr(sender, request_id, mapErr(err));
         };
         try self.sendBotRemoved(sender, request_id, room_id, bot_id);
+        try self.broadcastMemberLeft(room_id, bot_id);
     }
 
     fn handleStartGame(self: *Lobby, player_id: ids.PlayerId, sender: Sender, request_id: u32, room_id: ids.RoomId) !void {
@@ -237,7 +241,33 @@ pub const Lobby = struct {
 
         table.leave(player_id);
         _ = self.player_table.remove(player_id);
+        self.broadcastMemberLeft(room_id, player_id) catch {};
         if (!table.hasHumans()) self.destroyTable(room_id);
+    }
+
+    /// 向房内所有真人推送；`is_host` 是接收者当前是否房主。
+    fn broadcastMemberJoined(self: *Lobby, room_id: ids.RoomId, joined_id: ids.PlayerId) !void {
+        const table = self.tables.getPtr(room_id) orelse return;
+        var members: [table_mod.CAPACITY]ids.PlayerId = undefined;
+        for (table.copyMembers(&members)) |member_id| {
+            if (ids.isBot(member_id)) continue;
+            const conn_id = self.players.get(member_id) orelse continue;
+            const peer = self.connections.get(conn_id) orelse continue;
+            var buf: [160]u8 = undefined;
+            try peer.sender.send(try protocol.writeMemberJoined(&buf, room_id, joined_id, table.isHost(member_id)));
+        }
+    }
+
+    fn broadcastMemberLeft(self: *Lobby, room_id: ids.RoomId, left_id: ids.PlayerId) !void {
+        const table = self.tables.getPtr(room_id) orelse return;
+        var members: [table_mod.CAPACITY]ids.PlayerId = undefined;
+        for (table.copyMembers(&members)) |member_id| {
+            if (ids.isBot(member_id)) continue;
+            const conn_id = self.players.get(member_id) orelse continue;
+            const peer = self.connections.get(conn_id) orelse continue;
+            var buf: [160]u8 = undefined;
+            try peer.sender.send(try protocol.writeMemberLeft(&buf, room_id, left_id, table.isHost(member_id)));
+        }
     }
 
     fn finishTable(self: *Lobby, room_id: ids.RoomId) void {
@@ -277,14 +307,14 @@ pub const Lobby = struct {
         try sender.send(try protocol.writePong(&buf));
     }
 
-    fn sendRoomCreated(_: *Lobby, sender: Sender, request_id: u32, room_id: ids.RoomId) !void {
-        var buf: [128]u8 = undefined;
-        try sender.send(try protocol.writeRoomCreated(&buf, request_id, room_id));
+    fn sendRoomCreated(_: *Lobby, sender: Sender, request_id: u32, room_id: ids.RoomId, is_host: bool) !void {
+        var buf: [160]u8 = undefined;
+        try sender.send(try protocol.writeRoomCreated(&buf, request_id, room_id, is_host));
     }
 
-    fn sendRoomJoined(_: *Lobby, sender: Sender, request_id: u32, room_id: ids.RoomId) !void {
-        var buf: [128]u8 = undefined;
-        try sender.send(try protocol.writeRoomJoined(&buf, request_id, room_id));
+    fn sendRoomJoined(_: *Lobby, sender: Sender, request_id: u32, room_id: ids.RoomId, is_host: bool) !void {
+        var buf: [160]u8 = undefined;
+        try sender.send(try protocol.writeRoomJoined(&buf, request_id, room_id, is_host));
     }
 
     fn sendBotAdded(_: *Lobby, sender: Sender, request_id: u32, room_id: ids.RoomId, bot_id: ids.PlayerId) !void {

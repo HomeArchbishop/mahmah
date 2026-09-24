@@ -141,6 +141,7 @@ pub fn encodeEventForSeat(event: Event, viewer: ?Seat, buf: []u8) ![]const u8 {
         .reach_accepted => |r| try appendFmt(buf, &pos, "{{\"type\":\"reach_accepted\",\"actor\":{d}}}", .{r.actor}),
         .hora => |h| {
             // wire：actor/target/deltas/ura_markers；自摸时带 tsumo=true（荣和省略）
+            // tehais 为 MJAI 拓展亮牌（事件内已对不亮座位写 "?"），不做观察者遮罩
             try appendFmt(buf, &pos, "{{\"type\":\"hora\",\"actor\":{d},\"target\":{d},\"deltas\":[{d},{d},{d},{d}],\"ura_markers\":", .{
                 h.actor,
                 h.target,
@@ -153,6 +154,10 @@ pub fn encodeEventForSeat(event: Event, viewer: ?Seat, buf: []u8) ![]const u8 {
             if (h.tsumo) {
                 try append(buf, &pos, ",\"tsumo\":true");
             }
+            if (h.tehais) |tehais| {
+                try append(buf, &pos, ",\"tehais\":");
+                try encodeTehaisRaw(tehais, buf, &pos);
+            }
             try append(buf, &pos, "}");
         },
         .ryukyoku => |r| {
@@ -160,12 +165,9 @@ pub fn encodeEventForSeat(event: Event, viewer: ?Seat, buf: []u8) ![]const u8 {
                 r.reason, r.deltas[0], r.deltas[1], r.deltas[2], r.deltas[3],
             });
             if (r.tehais) |tehais| {
+                // MJAI 拓展亮牌：事件内已写 "?"，全座位原样下发
                 try append(buf, &pos, ",\"tehais\":");
-                if (viewer) |v| {
-                    try encodeTehaisMasked(tehais, v, buf, &pos);
-                } else {
-                    try encodeTehaisRaw(tehais, buf, &pos);
-                }
+                try encodeTehaisRaw(tehais, buf, &pos);
             }
             try append(buf, &pos, "}");
         },

@@ -292,14 +292,54 @@ export function applyRoomEvent (board: BoardSnapshot, msg: Record<string, unknow
         }),
       }
     }
-    case 'hora':
+    case 'hora': {
+      const round = board.round
+      if (!round) return board
+      if (!Array.isArray(msg.tehais)) return board
+      const tehais = msg.tehais as unknown[]
+      return {
+        ...board,
+        round: {
+          ...round,
+          players: round.players.map((p, i) => {
+            const hand = tehais[i]
+            if (!Array.isArray(hand) || hand.every((t) => t === '?')) return p
+            return {
+              ...p,
+              tehai: hand as Pai[],
+              tsumoPai: null,
+            }
+          }),
+        },
+      }
+    }
     case 'end_kyoku':
       return board
-    case 'ryukyoku':
+    case 'ryukyoku': {
+      const round = board.round
+      if (!round) return board
+      let next = round
+      if (Array.isArray(msg.tehais)) {
+        const tehais = msg.tehais as unknown[]
+        next = {
+          ...round,
+          players: round.players.map((p, i) => {
+            const hand = tehais[i]
+            if (!Array.isArray(hand) || hand.every((t) => t === '?')) return p
+            return {
+              ...p,
+              tehai: hand as Pai[],
+              tsumoPai: null,
+            }
+          }),
+        }
+      }
+      return { ...board, round: next }
+    }
     case 'end_game': {
       const round = board.round
       if (!round) return board
-      if (type === 'end_game' && Array.isArray(msg.scores)) {
+      if (Array.isArray(msg.scores)) {
         return { ...board, round: { ...round, scores: msg.scores as number[] } }
       }
       return board

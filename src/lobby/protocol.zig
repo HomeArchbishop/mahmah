@@ -94,12 +94,28 @@ pub fn writePong(buf: []u8) ![]const u8 {
     return std.fmt.bufPrint(buf, "{{\"type\":\"pong\"}}", .{});
 }
 
-pub fn writeRoomCreated(buf: []u8, request_id: u32, room_id: ids.RoomId) ![]const u8 {
-    return std.fmt.bufPrint(buf, "{{\"type\":\"room_created\",\"request_id\":{d},\"room_id\":{d}}}", .{ request_id, room_id });
+pub fn writeRoomCreated(buf: []u8, request_id: u32, room_id: ids.RoomId, is_host: bool) ![]const u8 {
+    return std.fmt.bufPrint(buf, "{{\"type\":\"room_created\",\"request_id\":{d},\"room_id\":{d},\"is_host\":{s}}}", .{
+        request_id, room_id, if (is_host) "true" else "false",
+    });
 }
 
-pub fn writeRoomJoined(buf: []u8, request_id: u32, room_id: ids.RoomId) ![]const u8 {
-    return std.fmt.bufPrint(buf, "{{\"type\":\"room_joined\",\"request_id\":{d},\"room_id\":{d}}}", .{ request_id, room_id });
+pub fn writeRoomJoined(buf: []u8, request_id: u32, room_id: ids.RoomId, is_host: bool) ![]const u8 {
+    return std.fmt.bufPrint(buf, "{{\"type\":\"room_joined\",\"request_id\":{d},\"room_id\":{d},\"is_host\":{s}}}", .{
+        request_id, room_id, if (is_host) "true" else "false",
+    });
+}
+
+pub fn writeMemberJoined(buf: []u8, room_id: ids.RoomId, player_id: ids.PlayerId, is_host: bool) ![]const u8 {
+    return std.fmt.bufPrint(buf, "{{\"type\":\"member_joined\",\"room_id\":{d},\"player_id\":{d},\"is_host\":{s}}}", .{
+        room_id, player_id, if (is_host) "true" else "false",
+    });
+}
+
+pub fn writeMemberLeft(buf: []u8, room_id: ids.RoomId, player_id: ids.PlayerId, is_host: bool) ![]const u8 {
+    return std.fmt.bufPrint(buf, "{{\"type\":\"member_left\",\"room_id\":{d},\"player_id\":{d},\"is_host\":{s}}}", .{
+        room_id, player_id, if (is_host) "true" else "false",
+    });
 }
 
 pub fn writeBotAdded(buf: []u8, request_id: u32, room_id: ids.RoomId, player_id: ids.PlayerId) ![]const u8 {

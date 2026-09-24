@@ -41,10 +41,11 @@
 ```
 
 ```json
-{"type":"room_created","request_id":1,"room_id":42}
+{"type":"room_created","request_id":1,"room_id":42,"is_host":true}
+{"type":"room_joined","request_id":1,"room_id":42,"is_host":true}
 ```
 
-创建的人自动当房主，并且已经在这个房间里了。
+创建成功后会连续收到这两条：先确认房间建好，再确认自己已进房。`is_host` 表示**你自己**是不是房主。
 
 ## 加入房间
 
@@ -53,7 +54,18 @@
 ```
 
 ```json
-{"type":"room_joined","request_id":2,"room_id":42}
+{"type":"room_joined","request_id":2,"room_id":42,"is_host":false}
+```
+
+只有房主能加减机器人、开局。
+
+## 成员进退（推送）
+
+有人进房、退房，或房主加减机器人时，向房内所有真人推送（无 `request_id`）。`is_host` 仍是**接收者自己**当前是不是房主（房主离开后可能变）。
+
+```json
+{"type":"member_joined","room_id":42,"player_id":1002,"is_host":true}
+{"type":"member_left","room_id":42,"player_id":1002,"is_host":true}
 ```
 
 ## 添加 / 删除机器人

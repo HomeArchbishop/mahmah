@@ -1,6 +1,7 @@
 const types = @import("types.zig");
 const rules_mod = @import("rules.zig");
 const Pai = types.Pai;
+const Seat = types.Seat;
 const CAPACITY = types.CAPACITY;
 const TEHAI_LEN = types.TEHAI_LEN;
 
@@ -163,20 +164,37 @@ pub const Kyoku = struct {
     pub fn tehaisForEvent(self: *const Kyoku) types.Tehais {
         var out: types.Tehais = undefined;
         for (0..CAPACITY) |i| {
-            const p = &self.players[i];
-            const skip_last = self.drawn != null and i == self.turn;
-            const take: usize = if (skip_last)
-                @min(TEHAI_LEN, if (p.tehai_len > 0) p.tehai_len - 1 else 0)
-            else
-                @min(TEHAI_LEN, p.tehai_len);
-            var n: usize = 0;
-            while (n < take) : (n += 1) {
-                out[i][n] = p.tehai[n];
-            }
-            while (n < TEHAI_LEN) : (n += 1) {
-                out[i][n] = "?";
+            self.fillSeatTehaiClosed(@intCast(i), &out[i]);
+        }
+        return out;
+    }
+
+    /// 局终亮牌：`reveal[s]==true` 的座位写闭张（最多 13），其余座位全 `"?"`。
+    pub fn tehaisReveal(self: *const Kyoku, reveal: [CAPACITY]bool) types.Tehais {
+        var out: types.Tehais = undefined;
+        for (0..CAPACITY) |i| {
+            if (reveal[i]) {
+                self.fillSeatTehaiClosed(@intCast(i), &out[i]);
+            } else {
+                out[i] = [_]Pai{"?"} ** TEHAI_LEN;
             }
         }
         return out;
+    }
+
+    fn fillSeatTehaiClosed(self: *const Kyoku, seat: Seat, out: *[TEHAI_LEN]Pai) void {
+        const p = &self.players[seat];
+        const skip_last = self.drawn != null and seat == self.turn;
+        const take: usize = if (skip_last)
+            @min(TEHAI_LEN, if (p.tehai_len > 0) p.tehai_len - 1 else 0)
+        else
+            @min(TEHAI_LEN, p.tehai_len);
+        var n: usize = 0;
+        while (n < take) : (n += 1) {
+            out[n] = p.tehai[n];
+        }
+        while (n < TEHAI_LEN) : (n += 1) {
+            out[n] = "?";
+        }
     }
 };
