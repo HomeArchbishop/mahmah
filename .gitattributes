@@ -1,3 +1,5 @@
-# riichienv 差分 harness：不计入本仓库主语言统计
 harness/** linguist-vendored
 harness/** linguist-detectable=false
+
+web/** linguist-vendored
+web/** linguist-detectable=false
