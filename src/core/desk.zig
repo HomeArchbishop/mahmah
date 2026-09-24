@@ -16,12 +16,24 @@ pub const GamePhase = enum {
 const Pending = struct {
     request_id: u32,
     seat: types.Seat,
+    issued_at_ms: i64,
+    deadline_ms: u32,
 };
 
 pub const PendingRef = struct {
     request_id: u32,
     seat: types.Seat,
+    issued_at_ms: i64,
+    deadline_ms: u32,
 };
+
+fn fullBank() u32 {
+    return (types.TimeBudget{}).bank_ms;
+}
+
+fn graceMs() u32 {
+    return (types.TimeBudget{}).grace_ms;
+}
 
 /// 对局会话门面：GamePhase、pending、拼 Outcome。
 pub const Desk = struct {
@@ -30,6 +42,8 @@ pub const Desk = struct {
     game_phase: GamePhase = .awaiting_players,
     next_request_id: u32 = 1,
     pendings: [CAPACITY]?Pending = .{ null, null, null, null },
+    /// 每座位本局剩余时间银行（ms）；每局 start_kyoku 回满。
+    banks: [CAPACITY]u32 = .{ fullBank(), fullBank(), fullBank(), fullBank() },
 
     event_buf: [64]types.Event = undefined,
     event_len: usize = 0,
@@ -55,36 +69,37 @@ pub const Desk = struct {
         return null;
     }
 
-    pub fn beginGame(self: *Desk) !types.Outcome {
+    pub fn beginGame(self: *Desk, now_ms: i64) !types.Outcome {
         if (self.game_phase != .awaiting_players) return error.InvalidGamePhase;
         self.game_phase = .playing;
         self.clearEvents();
+        self.resetBanks();
         const produced = engine.onStartGame(&self.kyoku, &self.apply_buf);
         for (produced) |ev| self.push(ev);
-        self.pushRequests();
+        self.pushRequests(now_ms);
         return self.outcome();
     }
 
-    pub fn onAction(self: *Desk, player_id: ids.PlayerId, request_id: u32, action: types.Action) !types.Outcome {
+    pub fn onAction(self: *Desk, player_id: ids.PlayerId, request_id: u32, action: types.Action, now_ms: i64) !types.Outcome {
         self.clearEvents();
         const actor_seat = self.seatOf(player_id);
         const slot = self.requirePending(request_id, actor_seat) orelse return self.outcome();
         const pending = self.pendings[slot].?;
 
         const seat = actor_seat orelse {
-            return self.reject(slot, pending.seat, request_id, .rejected, action);
+            return self.reject(slot, pending.seat, request_id, .rejected, action, now_ms);
         };
         if (seat != pending.seat) {
-            return self.reject(slot, pending.seat, request_id, .rejected, action);
+            return self.reject(slot, pending.seat, request_id, .rejected, action, now_ms);
         }
         if (!self.isLegal(slot, action)) {
-            return self.reject(slot, seat, request_id, .rejected, action);
+            return self.reject(slot, seat, request_id, .rejected, action, now_ms);
         }
 
         const produced = engine.apply(&self.kyoku, seat, action, &self.apply_buf) catch {
-            return self.reject(slot, seat, request_id, .rejected, action);
+            return self.reject(slot, seat, request_id, .rejected, action, now_ms);
         };
-        return self.accept(slot, request_id, .accepted, null, produced);
+        return self.accept(slot, request_id, .accepted, null, produced, now_ms);
     }
 
     pub fn onUnparseable(self: *Desk, player_id: ids.PlayerId, request_id: u32) !types.Outcome {
@@ -95,36 +110,37 @@ pub const Desk = struct {
             .seat = seat,
             .request_id = request_id,
             .status = .unparseable,
+            .bank_ms = self.banks[seat],
         } });
         return self.outcome();
     }
 
-    pub fn onTimeout(self: *Desk, request_id: u32) !types.Outcome {
+    pub fn onTimeout(self: *Desk, request_id: u32, now_ms: i64) !types.Outcome {
         self.clearEvents();
         const slot = self.requirePending(request_id, null) orelse return self.outcome();
-        return self.applyDefault(slot, request_id, .defaulted);
+        return self.applyDefault(slot, request_id, now_ms);
     }
 
     /// 代打：摸切 / 过。用于超时（不罚分）。
-    fn applyDefault(self: *Desk, slot: usize, request_id: u32, status: types.ResolveStatus) types.Outcome {
+    fn applyDefault(self: *Desk, slot: usize, request_id: u32, now_ms: i64) types.Outcome {
         const pending = self.pendings[slot].?;
         const action = engine.defaultAction(&self.kyoku, pending.seat) orelse {
-            const budget = types.TimeBudget{};
+            const settle = self.settleBank(pending.seat, .defaulted, elapsedMs(pending.issued_at_ms, now_ms));
             self.pendings[slot] = null;
             self.push(.{ .action_resolved = .{
                 .seat = pending.seat,
                 .request_id = request_id,
-                .status = status,
-                .elapsed_ms = budget.deadline_ms,
-                .bank_consumed_ms = budget.bank_ms,
-                .bank_ms = 0,
+                .status = .defaulted,
+                .elapsed_ms = settle.elapsed_ms,
+                .bank_consumed_ms = settle.consumed,
+                .bank_ms = settle.remaining,
             } });
             return self.outcome();
         };
         const produced = engine.apply(&self.kyoku, pending.seat, action, &self.apply_buf) catch {
-            return self.reject(slot, pending.seat, request_id, .rejected, null);
+            return self.reject(slot, pending.seat, request_id, .rejected, null, now_ms);
         };
-        return self.accept(slot, request_id, status, action, produced);
+        return self.accept(slot, request_id, .defaulted, action, produced, now_ms);
     }
 
     /// 返回 pendings 下标；无效则向 `ack_seat` 推 stale（无座位则静默丢弃）。
@@ -135,7 +151,12 @@ pub const Desk = struct {
             }
         }
         if (ack_seat) |seat| {
-            self.push(.{ .action_resolved = .{ .seat = seat, .request_id = request_id, .status = .stale } });
+            self.push(.{ .action_resolved = .{
+                .seat = seat,
+                .request_id = request_id,
+                .status = .stale,
+                .bank_ms = self.banks[seat],
+            } });
         }
         return null;
     }
@@ -147,23 +168,26 @@ pub const Desk = struct {
         status: types.ResolveStatus,
         defaulted_action: ?types.Action,
         produced: []const types.Event,
+        now_ms: i64,
     ) types.Outcome {
-        const budget = types.TimeBudget{};
-        const seat = self.pendings[slot].?.seat;
+        const pending = self.pendings[slot].?;
+        const seat = pending.seat;
+        const settle = self.settleBank(seat, status, elapsedMs(pending.issued_at_ms, now_ms));
         self.pendings[slot] = null;
         self.push(.{ .action_resolved = .{
             .seat = seat,
             .request_id = request_id,
             .status = status,
             .action = if (status == .defaulted) defaulted_action else null,
-            .elapsed_ms = if (status == .defaulted) budget.deadline_ms else 0,
-            .bank_consumed_ms = if (status == .defaulted) budget.bank_ms else 0,
-            .bank_ms = if (status == .defaulted) 0 else budget.bank_ms,
+            .elapsed_ms = settle.elapsed_ms,
+            .bank_consumed_ms = settle.consumed,
+            .bank_ms = settle.remaining,
         } });
         for (produced) |ev| self.push(ev);
         self.noteEndGame(produced);
+        self.noteStartKyoku(produced);
         if (self.game_phase == .playing and self.kyoku.phase != .idle) {
-            self.pushRequests();
+            self.pushRequests(now_ms);
         }
         return self.outcome();
     }
@@ -175,6 +199,7 @@ pub const Desk = struct {
         request_id: u32,
         status: types.ResolveStatus,
         attempted: ?types.Action,
+        now_ms: i64,
     ) types.Outcome {
         self.fillLegalTypes(slot);
         self.clearAllPendings();
@@ -186,15 +211,53 @@ pub const Desk = struct {
             .attempted = attempted,
             .reason = reason,
             .legal_types = if (status == .rejected) self.legal_type_names[0..self.legal_type_len] else null,
-            .bank_ms = 0,
+            .bank_ms = self.banks[seat],
         } });
         const produced = engine.chombo(&self.kyoku, seat, reason, &self.apply_buf);
         for (produced) |ev| self.push(ev);
         self.noteEndGame(produced);
+        self.noteStartKyoku(produced);
         if (self.game_phase == .playing and self.kyoku.phase != .idle) {
-            self.pushRequests();
+            self.pushRequests(now_ms);
         }
         return self.outcome();
+    }
+
+    fn settleBank(self: *Desk, seat: types.Seat, status: types.ResolveStatus, elapsed: u32) struct {
+        elapsed_ms: u32,
+        consumed: u32,
+        remaining: u32,
+    } {
+        if (status == .defaulted) {
+            const consumed = self.banks[seat];
+            self.banks[seat] = 0;
+            return .{ .elapsed_ms = elapsed, .consumed = consumed, .remaining = 0 };
+        }
+        if (status == .accepted) {
+            var consumed: u32 = 0;
+            const grace = graceMs();
+            if (elapsed > grace) {
+                const over = elapsed - grace;
+                consumed = @min(over, self.banks[seat]);
+                self.banks[seat] -= consumed;
+            }
+            return .{ .elapsed_ms = elapsed, .consumed = consumed, .remaining = self.banks[seat] };
+        }
+        return .{ .elapsed_ms = elapsed, .consumed = 0, .remaining = self.banks[seat] };
+    }
+
+    fn resetBanks(self: *Desk) void {
+        const full = fullBank();
+        self.banks = .{ full, full, full, full };
+    }
+
+    fn noteStartKyoku(self: *Desk, produced: []const types.Event) void {
+        for (produced) |ev| {
+            if (ev == .start_kyoku) {
+                self.resetBanks();
+                return;
+            }
+        }
     }
 
     fn noteEndGame(self: *Desk, produced: []const types.Event) void {
@@ -238,9 +301,8 @@ pub const Desk = struct {
     }
 
     /// 为仍需要出着且尚未挂 request 的座位挂 request。
-    fn pushRequests(self: *Desk) void {
+    fn pushRequests(self: *Desk, now_ms: i64) void {
         const seats = engine.seatsNeedingAction(&self.kyoku, &self.seat_buf);
-        // 清掉已不需要的 pending
         for (&self.pendings) |*slot| {
             if (slot.*) |p| {
                 var still = false;
@@ -251,6 +313,7 @@ pub const Desk = struct {
             }
         }
 
+        const grace = graceMs();
         for (seats) |seat| {
             if (self.hasPendingSeat(seat)) continue;
             const slot = self.freePendingSlot() orelse break;
@@ -258,10 +321,18 @@ pub const Desk = struct {
             self.legal_lens[slot] = legal.len;
             const request_id = self.next_request_id;
             self.next_request_id += 1;
-            self.pendings[slot] = .{ .request_id = request_id, .seat = seat };
+            const bank = self.banks[seat];
+            const deadline = grace + bank;
+            self.pendings[slot] = .{
+                .request_id = request_id,
+                .seat = seat,
+                .issued_at_ms = now_ms,
+                .deadline_ms = deadline,
+            };
             self.push(.{ .action_requested = .{
                 .seat = seat,
                 .request_id = request_id,
+                .time = .{ .grace_ms = grace, .bank_ms = bank, .deadline_ms = deadline },
                 .legal_actions = self.legal_bufs[slot][0..self.legal_lens[slot]],
             } });
         }
@@ -311,7 +382,12 @@ pub const Desk = struct {
         for (self.pendings) |p| {
             if (p) |pending| {
                 if (n >= out.len) break;
-                out[n] = .{ .request_id = pending.request_id, .seat = pending.seat };
+                out[n] = .{
+                    .request_id = pending.request_id,
+                    .seat = pending.seat,
+                    .issued_at_ms = pending.issued_at_ms,
+                    .deadline_ms = pending.deadline_ms,
+                };
                 n += 1;
             }
         }
@@ -319,17 +395,23 @@ pub const Desk = struct {
     }
 };
 
+fn elapsedMs(issued_at_ms: i64, now_ms: i64) u32 {
+    if (now_ms <= issued_at_ms) return 0;
+    const d = now_ms - issued_at_ms;
+    return std.math.cast(u32, d) orelse std.math.maxInt(u32);
+}
+
 test "desk beginGame then dahai" {
     const players = [_]u64{ 1, 2, 3, 4 };
     var desk = Desk.init(&players);
 
-    const started = try desk.beginGame();
+    const started = try desk.beginGame(0);
     try std.testing.expect(desk.game_phase == .playing);
     try std.testing.expect(started.events.len >= 2);
     const pending = desk.anyPending().?;
     const rid = pending.request_id;
     const pai = desk.kyoku.drawn.?;
-    const out = try desk.onAction(1, rid, .{ .dahai = .{ .pai = pai, .tsumogiri = true } });
+    const out = try desk.onAction(1, rid, .{ .dahai = .{ .pai = pai, .tsumogiri = true } }, 0);
     var saw_accepted = false;
     var saw_dahai = false;
     for (out.events) |ev| {
@@ -348,10 +430,10 @@ test "desk beginGame then dahai" {
 test "desk reject illegal then chombo continues next kyoku" {
     const players = [_]u64{ 1, 2, 3, 4 };
     var desk = Desk.init(&players);
-    _ = try desk.beginGame();
+    _ = try desk.beginGame(0);
     const rid = desk.anyPending().?.request_id;
 
-    const out = try desk.onAction(1, rid, .none);
+    const out = try desk.onAction(1, rid, .none, 0);
     var saw_rejected = false;
     var saw_ryukyoku = false;
     var saw_end_kyoku = false;
@@ -381,10 +463,10 @@ test "desk reject illegal then chombo continues next kyoku" {
 test "desk timeout defaults" {
     const players = [_]u64{ 1, 2, 3, 4 };
     var desk = Desk.init(&players);
-    _ = try desk.beginGame();
+    _ = try desk.beginGame(0);
     const rid = desk.anyPending().?.request_id;
 
-    const out = try desk.onTimeout(rid);
+    const out = try desk.onTimeout(rid, 25_000);
     var saw_defaulted = false;
     var saw_tsumogiri = false;
     for (out.events) |ev| {
@@ -404,10 +486,35 @@ test "desk timeout defaults" {
     try std.testing.expect(saw_tsumogiri);
 }
 
+test "desk bank consumes after grace" {
+    const players = [_]u64{ 1, 2, 3, 4 };
+    var desk = Desk.init(&players);
+    _ = try desk.beginGame(0);
+    const rid = desk.anyPending().?.request_id;
+    const pai = desk.kyoku.drawn.?;
+    // grace=5s，思考 8s → 扣银行 3s
+    const out = try desk.onAction(1, rid, .{ .dahai = .{ .pai = pai, .tsumogiri = true } }, 8_000);
+    var consumed: ?u32 = null;
+    var remaining: ?u32 = null;
+    for (out.events) |ev| {
+        switch (ev) {
+            .action_resolved => |r| {
+                if (r.status == .accepted) {
+                    consumed = r.bank_consumed_ms;
+                    remaining = r.bank_ms;
+                }
+            },
+            else => {},
+        }
+    }
+    try std.testing.expectEqual(@as(u32, 3_000), consumed.?);
+    try std.testing.expectEqual(@as(u32, 17_000), remaining.?);
+}
+
 test "desk unparseable discards without applying" {
     const players = [_]u64{ 1, 2, 3, 4 };
     var desk = Desk.init(&players);
-    _ = try desk.beginGame();
+    _ = try desk.beginGame(0);
     const rid = desk.anyPending().?.request_id;
 
     const out = try desk.onUnparseable(1, rid);
@@ -430,3 +537,4 @@ test "desk unparseable discards without applying" {
     try std.testing.expect(desk.anyPending() != null);
     try std.testing.expectEqual(rid, desk.anyPending().?.request_id);
 }
+

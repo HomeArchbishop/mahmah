@@ -324,6 +324,8 @@ sequenceDiagram
 
 光是超时不扣分。计时从发出 `request_action` 那一刻开始。
 
+正常在截止前回复时：免费段内不扣银行；超过免费段的部分从银行扣掉，并在 `action_ack` 的 `bank_consumed_ms` / `bank_ms` 里告诉你。超时代打则银行清零。
+
 ### 回晚了怎么办
 
 如果你带了 `request_id`：旧的 id 一律算 `stale`，绝不会拿去顶新请求。最坏就是被代打，不会因为“手慢绑定错题”被罚满贯。

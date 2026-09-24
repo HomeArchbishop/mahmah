@@ -2,6 +2,7 @@ const std = @import("std");
 const ids = @import("../shared/ids.zig");
 const room_mod = @import("room.zig");
 const Room = room_mod.Room;
+const Lobby = @import("../lobby/lobby.zig").Lobby;
 
 /// 管理进行中的对局 Room（每人一张 Desk）。等候组队在 lobby.Table。
 pub const RoomManager = struct {
@@ -11,6 +12,7 @@ pub const RoomManager = struct {
     mutex: std.Io.Mutex = .init,
     running: std.atomic.Value(bool) = .init(false),
     timer_thread: ?std.Thread = null,
+    lobby: ?*Lobby = null,
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io) RoomManager {
         return .{
@@ -18,6 +20,10 @@ pub const RoomManager = struct {
             .io = io,
             .rooms = .init(allocator),
         };
+    }
+
+    pub fn bindLobby(self: *RoomManager, lobby: *Lobby) void {
+        self.lobby = lobby;
     }
 
     pub fn deinit(self: *RoomManager) void {
@@ -85,12 +91,15 @@ pub const RoomManager = struct {
     fn timerMain(self: *RoomManager) void {
         while (self.running.load(.acquire)) {
             self.io.sleep(.fromMilliseconds(50), .awake) catch {};
-            self.pollAllTimeouts();
+            const now_ms = monoMillis(self.io);
+            self.pollAllTimeouts(now_ms);
+            if (self.lobby) |lobby| {
+                lobby.pollIdle(now_ms);
+            }
         }
     }
 
-    fn pollAllTimeouts(self: *RoomManager) void {
-        const now_ms = monoMillis(self.io);
+    fn pollAllTimeouts(self: *RoomManager, now_ms: i64) void {
         self.mutex.lockUncancelable(self.io);
         defer self.mutex.unlock(self.io);
         var it = self.rooms.iterator();

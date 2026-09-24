@@ -105,7 +105,7 @@ pub const Room = struct {
             slot.* = null;
         }
         for (due[0..n]) |rid| {
-            const outcome = try self.desk.onTimeout(rid);
+            const outcome = try self.desk.onTimeout(rid, now_ms);
             try self.deliverOutcome(outcome);
         }
     }
@@ -123,6 +123,7 @@ pub const Room = struct {
     }
 
     fn handleMessage(self: *Room, player_id: ids.PlayerId, data: []const u8) !void {
+        const now_ms = monoMillis(self.io);
         const parsed = protocol.parseAction(self.allocator, data) catch {
             // 解析失败或缺 request_id：丢掉，只回 unparseable ack，pending 不动
             const rid = protocol.peekRequestId(self.allocator, data) orelse 0;
@@ -130,7 +131,7 @@ pub const Room = struct {
             try self.deliverOutcome(outcome);
             return;
         };
-        const outcome = try self.desk.onAction(player_id, parsed.request_id, parsed.action);
+        const outcome = try self.desk.onAction(player_id, parsed.request_id, parsed.action, now_ms);
         try self.deliverOutcome(outcome);
     }
 
@@ -164,7 +165,8 @@ pub const Room = struct {
         self.io.random(std.mem.asBytes(&seed));
         self.desk.kyoku.shuffle_seed = seed;
 
-        const outcome = try self.desk.beginGame();
+        const now_ms = monoMillis(self.io);
+        const outcome = try self.desk.beginGame(now_ms);
         try self.recordCatchUp(outcome);
         try self.deliverOutcome(outcome);
     }
@@ -232,23 +234,24 @@ pub const Room = struct {
         self.syncDeadlines();
     }
 
-    /// 按 desk 当前 pending 挂 / 清截止；bot 已在 flush 里回过则不会留下 pending。
+    /// 按 desk 当前 pending 挂 / 清截止；截止 = issued_at + deadline_ms。
     fn syncDeadlines(self: *Room) void {
-        const budget = core.TimeBudget{};
-        const now_ms = monoMillis(self.io);
-        var live: [CAPACITY]?u32 = .{ null, null, null, null };
+        var live: [CAPACITY]?struct { rid: u32, due_ms: i64 } = .{ null, null, null, null };
         var refs: [CAPACITY]core.PendingRef = undefined;
         for (self.desk.listPendings(&refs)) |p| {
-            live[p.seat] = p.request_id;
+            live[p.seat] = .{
+                .rid = p.request_id,
+                .due_ms = p.issued_at_ms + @as(i64, @intCast(p.deadline_ms)),
+            };
         }
         for (0..CAPACITY) |seat| {
-            if (live[seat]) |rid| {
+            if (live[seat]) |info| {
                 if (self.deadlines[seat]) |d| {
-                    if (d.request_id == rid) continue;
+                    if (d.request_id == info.rid) continue;
                 }
                 self.deadlines[seat] = .{
-                    .request_id = rid,
-                    .due_ms = now_ms + @as(i64, @intCast(budget.deadline_ms)),
+                    .request_id = info.rid,
+                    .due_ms = info.due_ms,
                 };
             } else {
                 self.deadlines[seat] = null;

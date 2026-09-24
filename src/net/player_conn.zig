@@ -39,11 +39,16 @@ pub const PlayerConn = struct {
     }
 
     fn asSender(self: *PlayerConn) Sender {
-        return .{ .ptr = self, .send_fn = sendImpl };
+        return .{ .ptr = self, .send_fn = sendImpl, .close_fn = closeImpl };
     }
 
     fn sendImpl(ptr: *anyopaque, data: []const u8) !void {
         const self: *PlayerConn = @ptrCast(@alignCast(ptr));
         try self.conn.write(data);
+    }
+
+    fn closeImpl(ptr: *anyopaque) void {
+        const self: *PlayerConn = @ptrCast(@alignCast(ptr));
+        self.conn.close(.{}) catch {};
     }
 };

@@ -13,25 +13,38 @@ comptime {
     }
 }
 
+/// 连续无上行超过此时长则踢掉（与 docs/lobby.md 一致）。
+pub const IDLE_MS: i64 = 30_000;
+
+const ConnState = struct {
+    sender: Sender,
+    player_id: ids.PlayerId,
+    last_ms: i64,
+};
+
 pub const Lobby = struct {
     allocator: std.mem.Allocator,
+    io: std.Io,
     room_manager: *RoomManager,
     room_id_gen: *ids.RoomIdGen,
     player_id_gen: *ids.PlayerIdGen,
-    connections: std.AutoHashMap(ids.ConnId, Sender),
+    connections: std.AutoHashMap(ids.ConnId, ConnState),
     players: std.AutoHashMap(ids.PlayerId, ids.ConnId),
     tables: std.AutoHashMap(ids.RoomId, Table),
     /// Human currently seated at a waiting table.
     player_table: std.AutoHashMap(ids.PlayerId, ids.RoomId),
+    mutex: std.Io.Mutex = .init,
 
     pub fn init(
         allocator: std.mem.Allocator,
+        io: std.Io,
         room_manager: *RoomManager,
         room_id_gen: *ids.RoomIdGen,
         player_id_gen: *ids.PlayerIdGen,
     ) Lobby {
         return .{
             .allocator = allocator,
+            .io = io,
             .room_manager = room_manager,
             .room_id_gen = room_id_gen,
             .player_id_gen = player_id_gen,
@@ -50,13 +63,24 @@ pub const Lobby = struct {
     }
 
     pub fn onConnect(self: *Lobby, player_id: ids.PlayerId, conn_id: ids.ConnId, sender: Sender) !void {
-        try self.connections.put(conn_id, sender);
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        const now = monoMillis(self.io);
+        try self.connections.put(conn_id, .{
+            .sender = sender,
+            .player_id = player_id,
+            .last_ms = now,
+        });
         try self.players.put(player_id, conn_id);
         try self.sendWelcome(sender, player_id);
     }
 
     pub fn onMessage(self: *Lobby, player_id: ids.PlayerId, conn_id: ids.ConnId, data: []const u8) !void {
-        const sender = self.connections.get(conn_id) orelse return;
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        const state = self.connections.getPtr(conn_id) orelse return;
+        state.last_ms = monoMillis(self.io);
+        const sender = state.sender;
         const request = protocol.parse(self.allocator, data) catch {
             if (protocol.peekRequestId(self.allocator, data)) |request_id| {
                 return self.sendErr(sender, request_id, .bad_request);
@@ -75,6 +99,36 @@ pub const Lobby = struct {
     }
 
     pub fn onDisconnect(self: *Lobby, player_id: ids.PlayerId, conn_id: ids.ConnId) !void {
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        self.detachConn(player_id, conn_id);
+    }
+
+    /// 定时器调用：踢掉空闲过久的 lobby 连接。
+    pub fn pollIdle(self: *Lobby, now_ms: i64) void {
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+
+        var kick: [32]struct { conn_id: ids.ConnId, player_id: ids.PlayerId, sender: Sender } = undefined;
+        var n: usize = 0;
+        var it = self.connections.iterator();
+        while (it.next()) |entry| {
+            if (now_ms - entry.value_ptr.last_ms < IDLE_MS) continue;
+            if (n >= kick.len) break;
+            kick[n] = .{
+                .conn_id = entry.key_ptr.*,
+                .player_id = entry.value_ptr.player_id,
+                .sender = entry.value_ptr.sender,
+            };
+            n += 1;
+        }
+        for (kick[0..n]) |item| {
+            item.sender.close();
+            self.detachConn(item.player_id, item.conn_id);
+        }
+    }
+
+    fn detachConn(self: *Lobby, player_id: ids.PlayerId, conn_id: ids.ConnId) void {
         _ = self.connections.remove(conn_id);
         if (self.players.get(player_id)) |current| {
             if (current == conn_id) {
@@ -169,7 +223,7 @@ pub const Lobby = struct {
             if (member_id == except_player_id or ids.isBot(member_id)) continue;
             const conn_id = self.players.get(member_id) orelse continue;
             const peer = self.connections.get(conn_id) orelse continue;
-            try self.sendGameStartedPush(peer, room_id);
+            try self.sendGameStartedPush(peer.sender, room_id);
         }
     }
 
@@ -258,3 +312,7 @@ pub const Lobby = struct {
         try sender.send(try protocol.writeErr(&buf, request_id, code));
     }
 };
+
+fn monoMillis(io: std.Io) i64 {
+    return std.Io.Clock.awake.now(io).toMilliseconds();
+}
